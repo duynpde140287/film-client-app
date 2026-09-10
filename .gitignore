@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+desktop/package.runtime.json
+.npm-cache/
+test-results/
+release/

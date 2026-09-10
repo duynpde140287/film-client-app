@@ -1,0 +1,14 @@
+{
+  "name": "storyflow-studio-desktop",
+  "main": "http://127.0.0.1:5173",
+  "nodejs": false,
+  "window": {
+    "title": "StoryFlow Studio",
+    "width": 1440,
+    "height": 960,
+    "min_width": 880,
+    "min_height": 640,
+    "position": "center",
+    "show": true
+  }
+}
