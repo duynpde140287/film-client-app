@@ -145,3 +145,11 @@ export interface Dashboard {
   recentActivity: Activity[];
   mode: string;
 }
+
+/** Trạng thái kết nối session AI (ChatGPT, Veo3, CapCut) của user */
+export interface AiSession {
+  provider: "chatgpt" | "veo3" | "capcut";
+  connected: boolean;
+  connectedAt: string | null;
+  label: string | null;
+}

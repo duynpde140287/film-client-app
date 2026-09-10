@@ -219,9 +219,14 @@ function TemplateForm({
 export function Templates({
   notify,
   admin = false,
+  libraryMode = false,
+  onProjectCreated,
 }: {
   notify: (message: string) => void;
   admin?: boolean;
+  /** libraryMode=true: hiển thị Template Library để chọn template tạo dự án */
+  libraryMode?: boolean;
+  onProjectCreated?: (project: any) => void;
 }) {
   const [revision, setRevision] = useState(0),
     [search, setSearch] = useState(""),
@@ -277,15 +282,25 @@ export function Templates({
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">TEMPLATE STUDIO</span>
-          <h1>{admin ? "Hỗ trợ template" : "Khuôn mẫu cho mọi ý tưởng"}</h1>
+          <span className="eyebrow">
+            {libraryMode ? "TEMPLATE LIBRARY" : "TEMPLATE STUDIO"}
+          </span>
+          <h1>
+            {admin
+              ? "Hỗ trợ template"
+              : libraryMode
+                ? "Thư viện Template"
+                : "Tạo Template mới"}
+          </h1>
           <p>
             {admin
               ? "Kiểm tra và sửa phiên bản template của khách hàng."
-              : "Xây dựng một lần. Sáng tạo nhiều câu chuyện theo phong cách riêng."}
+              : libraryMode
+                ? "Chọn template đã xuất bản để tạo dự án mới."
+                : "Xây dựng một lần. Sáng tạo nhiều câu chuyện theo phong cách riêng."}
           </p>
         </div>
-        {!admin && (
+        {!admin && !libraryMode && (
           <button className="button primary" onClick={() => setCreate(true)}>
             <Plus size={18} /> Tạo template
           </button>

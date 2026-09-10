@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Play,
@@ -17,6 +17,7 @@ import {
   Clock3,
   Layers3,
   ChevronRight,
+  Scissors,
 } from "lucide-react";
 import { api } from "./api";
 import { useRemote } from "./hooks";
@@ -121,20 +122,36 @@ function Output({ step }: { step: Step }) {
     </div>
   );
 }
-export function Workspace({ notify }: { notify: (message: string) => void }) {
+export function Workspace({
+  notify,
+  onActivate,
+}: {
+  notify: (message: string) => void;
+  onActivate?: (project: Project | null) => void;
+}) {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const path = "/projects/" + id;
   const {
     data: project,
     error: loadError,
     setData,
   } = useRemote<Project>(path, 0, 2500);
-  const [tab, setTab] = useState("script"),
+  // Tab được truyền qua query string từ sidebar project steps
+  const defaultTab = searchParams.get("tab") || "script";
+  const [tab, setTab] = useState(defaultTab),
     [stepNo, setStepNo] = useState(1),
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
     [filter, setFilter] = useState("all"),
     [override, setOverride] = useState("");
+
+  // Báo sidebar biết project đang active
+  useEffect(() => {
+    if (project && onActivate) onActivate(project);
+    return () => { if (onActivate) onActivate(null); };
+  }, [project?.id]);
+
   async function command(
     action: string,
     body: unknown = {},
@@ -162,11 +179,12 @@ export function Workspace({ notify }: { notify: (message: string) => void }) {
   const exportJob = project.exports.find((j) => j.status === "DONE");
   const actionable = project.actions?.[tab];
   const tabs = [
-    { id: "script", label: "Kịch bản", icon: FileText },
+    { id: "script", label: "Script", icon: FileText },
     { id: "voice", label: "Voice", icon: Mic },
     { id: "image", label: "Hình ảnh", icon: ImageIcon },
     { id: "video", label: "Video", icon: Video },
-    { id: "export", label: "QC & Xuất bản", icon: Download },
+    { id: "capcut", label: "CapCut", icon: Scissors },
+    { id: "export", label: "QC & Xuất", icon: Download },
   ];
   return (
     <>
@@ -391,6 +409,18 @@ export function Workspace({ notify }: { notify: (message: string) => void }) {
               )}
             </details>
           </section>
+        </div>
+      ) : tab === "capcut" ? (
+        <div className="placeholder-page">
+          <span className="placeholder-icon">
+            <Scissors size={48} />
+          </span>
+          <h2>CapCut Export</h2>
+          <p>
+            Tự động push dự án này vào CapCut để chỉnh sửa nâng cao, thêm
+            hiệu ứng và xuất bản.
+          </p>
+          <span className="tag">Sắp ra mắt</span>
         </div>
       ) : tab === "export" ? (
         <div className="export-layout">

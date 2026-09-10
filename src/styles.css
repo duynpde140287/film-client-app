@@ -3254,3 +3254,412 @@ td {
 .scene-meta strong {
   font-size: 10px;
 }
+
+/* ================================================================
+   PLATFORM SWITCHER
+   ================================================================ */
+.platform-switcher {
+  position: relative;
+  padding: 12px 16px 8px;
+}
+.platform-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: #f0ecfb;
+  border: 1px solid #ddd6f7;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #4a3a9e;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.platform-btn:hover {
+  background: #e5dff7;
+}
+.platform-btn .rotated {
+  transform: rotate(180deg);
+}
+.platform-btn svg:first-child {
+  color: #e44;
+}
+.platform-btn span {
+  flex: 1;
+  text-align: left;
+}
+.platform-dropdown {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 16px;
+  right: 16px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px #0002;
+  z-index: 200;
+  overflow: hidden;
+}
+.platform-dropdown button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  color: #333;
+  transition: background 0.12s;
+}
+.platform-dropdown button:hover {
+  background: #f5f5ff;
+}
+.platform-dropdown button.selected {
+  background: #f0ecfb;
+  color: var(--purple);
+}
+
+/* ================================================================
+   ACTIVE PROJECT STEPS IN SIDEBAR
+   ================================================================ */
+.sidebar-active-project {
+  margin: 4px 12px 0;
+  background: #fafafa;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.active-project-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: #444;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.active-project-name span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.active-project-steps {
+  padding: 4px 0;
+}
+.project-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 12px;
+  background: none;
+  border: none;
+  font-size: 11.5px;
+  color: #666;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.project-step-row:hover {
+  background: #f0ecfb;
+  color: var(--purple);
+}
+.project-step-row.step-done {
+  color: #27ae60;
+}
+.project-step-row.step-done .step-icon-wrap {
+  color: #27ae60;
+}
+.step-icon-wrap {
+  width: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+}
+.step-check {
+  color: #27ae60;
+}
+.step-fraction {
+  margin-left: auto;
+  font-size: 10px;
+  color: #aaa;
+  font-variant-numeric: tabular-nums;
+}
+.sidebar-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 16px;
+}
+.sidebar-main-nav {
+  padding: 0 8px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ================================================================
+   LICENSE PROGRESS BAR
+   ================================================================ */
+.license-progress {
+  padding: 8px 12px 4px;
+}
+.license-bar-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+.license-bar {
+  height: 4px;
+  background: #e9eaf2;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.license-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--purple), #a388ee);
+  border-radius: 4px;
+  transition: width 0.5s;
+}
+.license-status-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  margin-top: 1px;
+}
+.license-active { color: #27ae60; }
+.license-expired { color: #e74c3c; }
+.license-scheduled { color: #f39c12; }
+.license-disabled { color: #999; }
+
+/* ================================================================
+   ACCOUNTS PAGE
+   ================================================================ */
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 20px;
+  margin-bottom: 40px;
+}
+.account-card {
+  background: white;
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+.account-card:hover {
+  box-shadow: 0 8px 28px #0001;
+}
+.account-card--connected {
+  border-color: #27ae6044;
+  background: #f8fffa;
+}
+.account-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.account-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0;
+}
+.ai-icon-chatgpt {
+  background: linear-gradient(135deg, #10a37f22, #10a37f11);
+  color: #10a37f;
+  border: 1px solid #10a37f33;
+}
+.ai-icon-veo3 {
+  background: linear-gradient(135deg, #4285f422, #4285f411);
+  color: #4285f4;
+  border: 1px solid #4285f433;
+}
+.ai-icon-capcut {
+  background: linear-gradient(135deg, #00000022, #00000011);
+  color: #111;
+  border: 1px solid #00000022;
+}
+.account-card-header > div {
+  flex: 1;
+}
+.account-card-header h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+.connection-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.connection-badge.connected {
+  background: #e8f8f0;
+  color: #27ae60;
+}
+.connection-badge.disconnected {
+  background: #f5f5f8;
+  color: #999;
+}
+.account-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.6;
+}
+.account-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  background: #f0f8f4;
+  border: 1px solid #d4edda;
+  border-radius: 8px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+}
+.account-info-label {
+  font-weight: 600;
+  color: #555;
+}
+.account-manual-cookie {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.account-manual-cookie label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #555;
+}
+.account-manual-cookie textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 11px;
+  font-family: monospace;
+  resize: vertical;
+  min-height: 72px;
+  background: #fafafa;
+}
+.account-manual-cookie textarea:focus {
+  outline: none;
+  border-color: var(--purple);
+  background: white;
+}
+.account-card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+.button.danger {
+  color: #e74c3c;
+  border-color: #e74c3c33;
+}
+.button.danger:hover {
+  background: #fef0ef;
+}
+.accounts-how {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+}
+.accounts-how h3 {
+  margin: 0 0 20px;
+  font-size: 15px;
+}
+.how-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 20px;
+}
+.how-step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.how-num {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--purple);
+  opacity: 0.25;
+  line-height: 1;
+  min-width: 32px;
+}
+.how-step strong {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.how-step p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ================================================================
+   PLACEHOLDER PAGES (YouTube Upload, CapCut Export, Settings…)
+   ================================================================ */
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  gap: 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.placeholder-icon {
+  width: 80px;
+  height: 80px;
+  background: #f0ecfb;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--purple);
+}
+.placeholder-page h2 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+}
+.placeholder-page p {
+  margin: 0;
+  max-width: 360px;
+  font-size: 13px;
+  line-height: 1.7;
+}
