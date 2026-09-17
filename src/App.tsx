@@ -1,3 +1,4 @@
+import { AiConnections } from './components/AiConnections';
 import { useEffect, useState, type FormEvent } from "react";
 import {
   NavLink,
@@ -31,6 +32,7 @@ import {
   Video,
   Scissors,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   AlertCircle,
   Wifi,
@@ -39,11 +41,12 @@ import {
   Clapperboard,
 } from "lucide-react";
 import { api, deviceId, getSession, saveSession } from "./api";
-import type { Session, User, Project, AiSession } from "./types";
+import type { Session, User, Project } from "./types";
 import { ErrorBox, Field, Spinner } from "./ui";
 import { Overview, Projects } from "./Overview";
 import { Templates } from "./Templates";
 import { Workspace } from "./Workspace";
+import { ExternalSessionPage } from "./ExternalSession";
 import { useRemote } from "./hooks";
 
 /** ============================================================
@@ -55,12 +58,18 @@ function Login() {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const values = new FormData(e.currentTarget);
+    const username = String(values.get("username") || values.get("email") || "").trim();
+    const pw = String(values.get("password") || "");
+    if (!username) {
+      setError("Vui lòng nhập tài khoản.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const session = await api<Session>("/auth/login", "POST", {
-        email: values.get("email"),
-        password: values.get("password"),
+        username,
+        password: pw,
         deviceId: deviceId(),
       });
       saveSession(session);
@@ -80,14 +89,14 @@ function Login() {
           ProjectX<span className="brand-dot">.</span>film
         </Link>
         <div className="login-copy">
-          <span className="eyebrow">CÔNG CỤ LÀM PHIM AI TỰ ĐỘNG</span>
+          <span className="eyebrow">CONTENT AUTOMATION</span>
           <h1>
             Ý tưởng của bạn.
             <br />
             AI lo phần còn lại.
           </h1>
           <p>
-            Tự động tạo kịch bản, voice, hình ảnh và video với ChatGPT + Veo3.
+            Tạo nội dung, hình ảnh, giọng đọc và video tự động.
             Bạn chỉ cần nhập ý tưởng.
           </p>
           <div className="creative-orbit">
@@ -107,19 +116,19 @@ function Login() {
             <i className="orbital-ring" />
           </div>
         </div>
-        <span className="login-foot">AI Film Studio · Desktop App</span>
+        <span className="login-foot">Content Studio · Desktop App</span>
       </section>
       <section className="login-panel">
         <div className="login-form">
           <span className="tag">CREATOR WORKSPACE</span>
           <h2>Chào mừng trở lại</h2>
-          <p>Đăng nhập bằng tài khoản được cấp bởi quản trị viên.</p>
+          <p>Đăng nhập bằng tài khoản được cấp.</p>
           <form onSubmit={submit}>
-            <Field label="Email">
+            <Field label="Tài khoản">
               <input
-                name="email"
-                type="email"
-                placeholder="ban@example.com"
+                name="username"
+                type="text"
+                placeholder="Nhập tài khoản của bạn"
                 autoComplete="username"
                 required
               />
@@ -145,8 +154,7 @@ function Login() {
             </button>
           </form>
           <p className="login-note">
-            <Bot size={16} /> Sau khi vào, kết nối ChatGPT và Veo3 ở trang
-            Accounts để bắt đầu tạo phim.
+            <Bot size={16} /> Kết nối ChatGPT/Veo 3 khi tạo ảnh và video.
           </p>
         </div>
       </section>
@@ -163,64 +171,83 @@ const STEP_TABS = [
   { id: "voice", label: "Voice", icon: Mic },
   { id: "image", label: "Image", icon: ImageIcon },
   { id: "video", label: "Video", icon: Video },
-  { id: "capcut", label: "CapCut", icon: Scissors },
 ];
 
-function ActiveProjectSteps({ projectId }: { projectId: string }) {
-  const { data: project } = useRemote<Project>(
-    "/projects/" + projectId,
-    0,
-    5000,
-  );
+function SidebarProjectItem({ project }: { project: Project | null }) {
+  const projectId = project?.id;
   const navigate = useNavigate();
   const location = useLocation();
+  const isProjectRoute = location.pathname === "/projects/" + projectId;
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (isProjectRoute) setOpen(true);
+  }, [isProjectRoute, projectId]);
 
-  if (!project) return null;
+
 
   return (
     <div className="sidebar-active-project">
-      <button
-        className="active-project-name"
-        onClick={() => navigate("/projects/" + projectId)}
-        title={project.name}
-      >
-        <ChevronDown size={13} />
-        <span>{project.name}</span>
-      </button>
-      <div className="active-project-steps">
-        {STEP_TABS.map((tab) => {
-          const prog = project.progress[tab.id];
-          const done = prog?.done ?? 0;
-          const total = prog?.total ?? 0;
-          const complete = total > 0 && done === total;
-          const isActive = location.pathname.includes(
-            "/projects/" + projectId,
-          );
-          return (
-            <button
-              key={tab.id}
-              className={`project-step-row${complete ? " step-done" : ""}${isActive ? " step-active" : ""}`}
-              onClick={() =>
-                navigate("/projects/" + projectId + "?tab=" + tab.id)
-              }
-            >
-              <span className="step-icon-wrap">
-                {complete ? (
-                  <Check size={12} className="step-check" />
-                ) : (
-                  <tab.icon size={13} />
-                )}
-              </span>
-              <span>{tab.label}</span>
-              {total > 0 && (
-                <span className="step-fraction">
-                  {done}/{total}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      <div className="active-project-header">
+        <button
+          className="active-project-name"
+          disabled={!project}
+          onClick={() => project && navigate("/projects/" + projectId)}
+          title={project?.name || "Chưa mở dự án"}
+        >
+          <Clapperboard size={14} className="active-project-icon" />
+          <span>{project?.name || "Dự án rỗng"}</span>
+        </button>
+        <button
+          disabled={!project}
+          className={`active-project-toggle ${open ? "is-expanded" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((prev) => !prev);
+          }}
+          title={open ? "Thu gọn" : "Xổ dự án"}
+          aria-label={open ? "Thu gọn" : "Xổ dự án"}
+        >
+          <ChevronDown size={14} />
+        </button>
       </div>
+
+      {(open || !project) && (
+        <div className="active-project-steps">
+          {STEP_TABS.map((tab) => {
+            const prog = project?.progress?.[tab.id];
+            const done = prog?.done ?? 0;
+            const total = prog?.total ?? 0;
+            const complete = total > 0 && done === total;
+            const isActive =
+              location.pathname === "/projects/" + projectId &&
+              (new URLSearchParams(location.search).get("tab") || "script") === tab.id;
+            return (
+              <button
+                key={tab.id}
+                disabled={!project}
+                className={`project-step-row${complete ? " step-done" : ""}${isActive ? " step-active" : ""}`}
+                onClick={() =>
+                  navigate("/projects/" + projectId + "?tab=" + tab.id)
+                }
+              >
+                <span className="step-icon-wrap">
+                  {complete ? (
+                    <Check size={12} className="step-check" />
+                  ) : (
+                    <tab.icon size={13} />
+                  )}
+                </span>
+                <span>{tab.label}</span>
+                {total > 0 && (
+                  <span className="step-fraction">
+                    {done}/{total}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -231,331 +258,227 @@ function ActiveProjectSteps({ projectId }: { projectId: string }) {
  *  - CapCut: user tự lấy cookie thủ công rồi paste vào → hệ thống
  *            tự động push video vào CapCut khi xuất
  * ============================================================ */
-function AccountsPage() {
-  const { data: sessions, setData } = useRemote<AiSession[]>("/ai-sessions");
-  const [busy, setBusy] = useState<string | null>(null);
+function YouTubeUploadPage() {
+  return <ExternalSessionPage provider="youtube" />;
+}
+
+function CapCutExportPage() {
+  return <ExternalSessionPage provider="capcut" />;
+}
+
+type VoiceAllocation = {
+  available: boolean;
+  status: string;
+  requiresUserLogin: boolean;
+};
+
+type AiConnection = {
+  provider: "chatgpt" | "veo3" | string;
+  label: string;
+  loginUrl: string;
+  connected: boolean;
+  adapterAvailable?: boolean;
+  status: string;
+  description: string;
+  savedAt?: string | null;
+};
+
+function SettingsPage() {
+  const session = getSession();
+  const [revision, setRevision] = useState(0);
+  const [name, setName] = useState(session?.user.name || "");
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+  });
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  const [capcutCookie, setCapcutCookie] = useState("");
-  const [capcutLabel, setCapcutLabel] = useState("");
+  const [notice, setNotice] = useState("");
 
-  // Kiểm tra xem đang chạy trong NW.js không
-  const isDesktop = typeof window !== "undefined" && "nw" in window;
+  const { data: gemini, error: geminiError } = useRemote<VoiceAllocation>('/provider-sessions/gemini', revision);
+  const { data: voice, error: voiceError } = useRemote<VoiceAllocation>(
+    "/provider-sessions/onimivoice",
+    revision,
+  );
 
-  /** Mở browser window NW.js, chờ user login, capture cookie tự động */
-  async function connectAutoCapture(provider: "chatgpt" | "veo3") {
-    setError("");
-    if (!isDesktop) {
-      setError("Tính năng này chỉ khả dụng trên ứng dụng desktop (npm run desktop).");
-      return;
-    }
-    setBusy(provider);
-    try {
-      const url = provider === "chatgpt"
-        ? "https://chatgpt.com"
-        : "https://labs.google/fx/tools/video-fx";
-      const nw = (window as any).nw;
-      const win = nw.Window.open(url, {
-        title: provider === "chatgpt" ? "Đăng nhập ChatGPT" : "Đăng nhập Google Veo3",
-        width: 1024, height: 768, position: "center", new_instance: false,
-      });
-      const cookieName = provider === "chatgpt"
-        ? "__Secure-next-auth.session-token"
-        : "SSID";
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        if (++attempts > 120) {
-          clearInterval(poll); setBusy(null);
-          setError("Hết thời gian chờ. Vui lòng thử lại.");
-          try { win.close(); } catch {}
-          return;
-        }
-        try {
-          const cookies = await nw.cookies.getAll({ url });
-          const target = cookies.find((c: any) => c.name === cookieName);
-          if (target) {
-            clearInterval(poll);
-            const result = await api("/ai-sessions", "POST", {
-              provider, sessionCookie: target.value,
-              label: target.domain || provider,
-            });
-            setData((prev) => prev
-              ? prev.map((s) => s.provider === provider ? (result as AiSession) : s)
-              : prev);
-            setBusy(null);
-            try { win.close(); } catch {}
-          }
-        } catch {}
-      }, 1000);
-      win.on("closed", () => { clearInterval(poll); setBusy(null); });
-    } catch (e) {
-      setError((e as Error).message);
-      setBusy(null);
-    }
+  useEffect(() => {
+    setName(getSession()?.user.name || "");
+  }, [session?.user.id]);
+
+  const user = session?.user;
+  const expiryLabel =
+    user?.expiresAt
+        ? new Date(user.expiresAt).toLocaleDateString("vi-VN")
+        : "Chưa có hạn";
+  const statusLabel =
+    user?.licenseStatus === "ACTIVE"
+      ? "Đang dùng"
+      : user?.licenseStatus === "EXPIRED"
+        ? "Hết hạn"
+        : user?.licenseStatus || "Không rõ";
+
+  function flash(message: string) {
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 3500);
   }
 
-  /** Lưu CapCut cookie thủ công do user paste vào */
-  async function saveCapcutCookie() {
-    if (!capcutCookie.trim()) {
-      setError("Vui lòng dán cookie CapCut trước khi lưu.");
-      return;
-    }
+  async function saveName(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const current = getSession();
+    if (!current) return;
+    setBusy("profile");
     setError("");
-    setBusy("capcut");
     try {
-      const result = await api("/ai-sessions", "POST", {
-        provider: "capcut",
-        sessionCookie: capcutCookie.trim(),
-        label: capcutLabel.trim() || "CapCut",
-      });
-      setData((prev) => prev
-        ? prev.map((s) => s.provider === "capcut" ? (result as AiSession) : s)
-        : [result as AiSession]);
-      setCapcutCookie("");
+      const nextUser = await api<User>("/auth/me", "PATCH", { name });
+      saveSession({ ...current, user: nextUser });
+      flash("Đã lưu tên.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(null);
+      setBusy("");
     }
   }
 
-  async function disconnect(provider: "chatgpt" | "veo3" | "capcut") {
-    setBusy(provider + "_remove");
+  async function changePassword(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setBusy("password");
+    setError("");
     try {
-      await api("/ai-sessions/remove", "POST", { provider });
-      setData((prev) => prev
-        ? prev.map((s) => s.provider === provider
-          ? { ...s, connected: false, connectedAt: null, label: null }
-          : s)
-        : prev);
+      const next = await api<Session>("/auth/password", "POST", passwordForm);
+      saveSession(next);
+      setPasswordForm({ currentPassword: "", newPassword: "" });
+      flash("Đã đổi mật khẩu.");
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(null);
+      setBusy("");
     }
   }
-
-  type AutoProvider = { key: "chatgpt" | "veo3"; name: string; desc: string; icon: React.ReactNode; usedFor: string; };
-  const autoProviders: AutoProvider[] = [
-    {
-      key: "chatgpt",
-      name: "ChatGPT",
-      desc: "Tự động tạo kịch bản (Script). Ứng dụng mở cửa sổ chatgpt.com, bạn đăng nhập, session được capture tự động.",
-      icon: <Bot size={28} />,
-      usedFor: "Script · Kịch bản",
-    },
-    {
-      key: "veo3",
-      name: "Google Veo3",
-      desc: "Tự động generate video AI. Ứng dụng mở cửa sổ Veo3, bạn đăng nhập, session được capture tự động.",
-      icon: <Film size={28} />,
-      usedFor: "Video · Hình ảnh",
-    },
-  ];
-
-  const capcutSession = sessions?.find((s) => s.provider === "capcut");
 
   return (
     <>
-      <div className="page-heading">
+      <div className="page-heading settings-heading">
         <div>
-          <span className="eyebrow">TÀI KHOẢN AI</span>
-          <h1>Kết nối dịch vụ AI</h1>
-          <p>
-            Hệ thống dùng session của bạn để tự động thao tác AI. Tài khoản
-            AI là của bạn — chúng tôi không lưu mật khẩu.
-          </p>
+          <span className="eyebrow">SETTINGS</span>
+          <h1>Cài đặt</h1>
         </div>
       </div>
-
-      {!isDesktop && (
-        <div className="demo-note compact-note">
-          <span className="tag">DESKTOP ONLY</span> ChatGPT & Veo3 chỉ tự
-          động capture khi chạy desktop app (<code>npm run desktop</code>).
-          CapCut hỗ trợ cả web và desktop.
+      <ErrorBox message={error || voiceError || geminiError} />
+      {notice && (
+        <div className="settings-alert success" role="status">
+          <Check size={16} /> {notice}
         </div>
       )}
-
-      <ErrorBox message={error} />
-
-      {/* ── ChatGPT + Veo3: tự động capture ── */}
-      <div className="accounts-grid">
-        {autoProviders.map((p) => {
-          const session = sessions?.find((s) => s.provider === p.key);
-          const connected = session?.connected ?? false;
-          const isBusy = busy === p.key || busy === p.key + "_remove";
-          return (
-            <div key={p.key} className={`account-card${connected ? " account-card--connected" : ""}`}>
-              <div className="account-card-header">
-                <span className={`account-icon ai-icon-${p.key}`}>{p.icon}</span>
-                <div>
-                  <h3>{p.name}</h3>
-                  <span className="tag">{p.usedFor}</span>
-                </div>
-                <span className={`connection-badge${connected ? " connected" : " disconnected"}`}>
-                  {connected ? <><Wifi size={14} /> Đã kết nối</> : <><WifiOff size={14} /> Chưa kết nối</>}
-                </span>
-              </div>
-              <p className="account-desc">{p.desc}</p>
-              {connected && session?.label && (
-                <div className="account-info">
-                  <span className="account-info-label">Phiên:</span>
-                  <span>{session.label}</span>
-                  {session.connectedAt && (
-                    <span className="muted">· {new Date(session.connectedAt).toLocaleString("vi-VN")}</span>
-                  )}
-                </div>
-              )}
-              <div className="account-card-footer">
-                {connected ? (
-                  <>
-                    <button className="button" disabled={isBusy} onClick={() => void connectAutoCapture(p.key)}>
-                      {isBusy && busy === p.key ? <Spinner /> : <ArrowRight size={15} />} Kết nối lại
-                    </button>
-                    <button className="button danger" disabled={isBusy} onClick={() => void disconnect(p.key)}>
-                      {isBusy && busy === p.key + "_remove" ? <Spinner /> : <WifiOff size={15} />} Ngắt
-                    </button>
-                  </>
-                ) : (
-                  <button className="button primary" disabled={isBusy || !isDesktop} onClick={() => void connectAutoCapture(p.key)}>
-                    {isBusy ? <Spinner /> : <Wifi size={15} />} Kết nối {p.name}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* ── CapCut: paste cookie thủ công ── */}
-        <div className={`account-card${capcutSession?.connected ? " account-card--connected" : ""}`}>
-          <div className="account-card-header">
-            <span className="account-icon ai-icon-capcut">
-              <Scissors size={28} />
-            </span>
+      <div className="settings-grid">
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <Settings size={18} />
             <div>
-              <h3>CapCut</h3>
-              <span className="tag">Video Export · Tự động push</span>
+              <h2>Hồ sơ</h2>
             </div>
-            <span className={`connection-badge${capcutSession?.connected ? " connected" : " disconnected"}`}>
-              {capcutSession?.connected
-                ? <><Wifi size={14} /> Đã kết nối</>
-                : <><WifiOff size={14} /> Chưa kết nối</>}
-            </span>
           </div>
-          <p className="account-desc">
-            Khi xuất video, hệ thống tự động đưa project vào CapCut. Lấy
-            session cookie từ trình duyệt (F12 → Application → Cookies →{" "}
-            <code>capcut.com</code>) rồi paste vào đây.
-          </p>
-          {capcutSession?.connected && (
-            <div className="account-info">
-              <span className="account-info-label">Phiên:</span>
-              <span>{capcutSession.label}</span>
-              {capcutSession.connectedAt && (
-                <span className="muted">· {new Date(capcutSession.connectedAt).toLocaleString("vi-VN")}</span>
-              )}
-            </div>
-          )}
-          <div className="account-manual-cookie">
-            <label>Session Cookie (dán từ DevTools)</label>
-            <textarea
-              value={capcutCookie}
-              onChange={(e) => setCapcutCookie(e.target.value)}
-              placeholder="Paste toàn bộ cookie string từ F12 → Application → Cookies → capcut.com..."
-              rows={3}
-            />
-            <input
-              type="text"
-              placeholder="Tên phiên (tùy chọn, ví dụ: tài khoản CapCut của bạn)"
-              value={capcutLabel}
-              onChange={(e) => setCapcutLabel(e.target.value)}
-              style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", fontSize: 12 }}
-            />
-          </div>
-          <div className="account-card-footer">
-            <button
-              className="button primary"
-              disabled={busy === "capcut" || !capcutCookie.trim()}
-              onClick={() => void saveCapcutCookie()}
-            >
-              {busy === "capcut" ? <Spinner /> : <Check size={15} />} Lưu Cookie CapCut
+          <form onSubmit={saveName} className="settings-form">
+            <Field label="Tên của bạn">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Tên hiển thị"
+                autoComplete="name"
+                required
+              />
+            </Field>
+            <button className="button primary" disabled={busy === "profile"}>
+              {busy === "profile" ? <Spinner /> : <Check size={16} />} Lưu
             </button>
-            {capcutSession?.connected && (
-              <button
-                className="button danger"
-                disabled={busy === "capcut_remove"}
-                onClick={() => void disconnect("capcut")}
-              >
-                {busy === "capcut_remove" ? <Spinner /> : <WifiOff size={15} />} Ngắt
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+          </form>
+        </section>
 
-      {/* ── Hướng dẫn ── */}
-      <div className="accounts-how">
-        <h3>Cách hoạt động</h3>
-        <div className="how-steps">
-          {[
-            { num: "01", title: "ChatGPT & Veo3 — Tự động", desc: "Bấm Kết nối → ứng dụng mở browser → bạn đăng nhập → session được capture tự động." },
-            { num: "02", title: "CapCut — Thủ công", desc: "Mở F12 trên trình duyệt tại capcut.com → Application → Cookies → copy toàn bộ → paste vào đây." },
-            { num: "03", title: "Tạo kịch bản", desc: "Vào Template Library → chọn template → tạo dự án → hệ thống dùng ChatGPT để tạo script tự động." },
-            { num: "04", title: "Xuất video → CapCut", desc: "Sau khi hoàn tất Script → Voice → Image → Video, xuất là hệ thống tự push vào CapCut." },
-          ].map((s) => (
-            <div key={s.num} className="how-step">
-              <span className="how-num">{s.num}</span>
-              <div>
-                <strong>{s.title}</strong>
-                <p>{s.desc}</p>
-              </div>
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <ShieldStatus connected={true} />
+            <div>
+              <h2>Mật khẩu</h2>
             </div>
-          ))}
-        </div>
+          </div>
+          <form onSubmit={changePassword} className="settings-form">
+            <Field label="Mật khẩu hiện tại">
+              <input
+                type="password"
+                value={passwordForm.currentPassword}
+                onChange={(e) =>
+                  setPasswordForm((prev) => ({
+                    ...prev,
+                    currentPassword: e.target.value,
+                  }))
+                }
+                autoComplete="current-password"
+                required
+              />
+            </Field>
+            <Field label="Mật khẩu mới">
+              <input
+                type="password"
+                value={passwordForm.newPassword}
+                onChange={(e) =>
+                  setPasswordForm((prev) => ({
+                    ...prev,
+                    newPassword: e.target.value,
+                  }))
+                }
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+            <button className="button primary" disabled={busy === "password"}>
+              {busy === "password" ? <Spinner /> : <Check size={16} />} Đổi
+            </button>
+          </form>
+        </section>
+
+        <section className="settings-card quota-card">
+          <div className="settings-card-title">
+            <AlertCircle size={18} />
+            <div>
+              <h2>Hạn mức</h2>
+            </div>
+          </div>
+          <div className="quota-stack">
+            <span className="quota-pill">{statusLabel}</span>
+            <strong>{expiryLabel}</strong>
+            <small>Tự khóa khi hết hạn</small>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title">
+            <Mic size={18} />
+            <div>
+              <h2>Omni Voice</h2>
+            </div>
+          </div>
+          <div className="quota-stack">
+            <span className="quota-pill">{voice?.available ? "Có session" : voice?.status === "EXPIRED" ? "Cần cập nhật session" : "Chưa có session"}</span>
+            <strong>{voice?.available ? "Sẵn sàng sử dụng" : "Chờ cấu hình"}</strong>
+            <small>Không cần đăng nhập riêng.</small>
+          </div>
+        </section>
+
+        <section className="settings-card">
+          <div className="settings-card-title"><Bot size={18} /><h2>Gemini</h2></div>
+          <div className="quota-stack">
+            <span className="quota-pill">{gemini?.available ? "Có session" : gemini?.status === "EXPIRED" ? "Cần cập nhật session" : "Chưa có session"}</span>
+            <strong>Template và script</strong>
+            <small>Dùng session hệ thống.</small>
+          </div>
+        </section>
+        <AiConnections />
       </div>
     </>
   );
 }
 
-/** ============================================================
- *  PLACEHOLDER PAGES
- * ============================================================ */
-function YouTubeUploadPage() {
-  return (
-    <div className="placeholder-page">
-      <span className="placeholder-icon">
-        <Youtube size={48} />
-      </span>
-      <h2>YouTube Upload</h2>
-      <p>Xuất và upload video trực tiếp lên kênh YouTube của bạn.</p>
-      <span className="tag">Sắp ra mắt</span>
-    </div>
-  );
-}
-
-function CapCutExportPage() {
-  return (
-    <div className="placeholder-page">
-      <span className="placeholder-icon">
-        <Scissors size={48} />
-      </span>
-      <h2>CapCut Export</h2>
-      <p>Tự động push project vào CapCut để chỉnh sửa nâng cao.</p>
-      <span className="tag">Sắp ra mắt</span>
-    </div>
-  );
-}
-
-function SettingsPage() {
-  return (
-    <div className="placeholder-page">
-      <span className="placeholder-icon">
-        <Settings size={48} />
-      </span>
-      <h2>Cài đặt</h2>
-      <p>Tùy chỉnh ứng dụng, ngôn ngữ, và preferences.</p>
-      <span className="tag">Sắp ra mắt</span>
-    </div>
-  );
+function ShieldStatus({ connected }: { connected: boolean }) {
+  return connected ? <Wifi size={18} /> : <WifiOff size={18} />;
 }
 
 function SupportPage() {
@@ -593,7 +516,7 @@ export function App() {
   }, []);
   useEffect(() => {
     setMobile(false);
-  }, [route.pathname]);
+  }, [route.pathname, route.search]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 4500);
@@ -606,11 +529,13 @@ export function App() {
         .catch(() => {});
   }, [session?.token]);
 
+  useEffect(() => { setActiveProject(null); }, [session?.user.id]);
+
   if (!session) return <Login />;
 
   const licenseLabel =
     session.user.licenseStatus === "ACTIVE"
-      ? "Không giới hạn"
+      ? "Đang hoạt động"
       : session.user.licenseStatus === "EXPIRED"
         ? "Đã hết hạn"
         : session.user.licenseStatus === "SCHEDULED"
@@ -625,13 +550,15 @@ export function App() {
   }
 
   const mainNavLinks = [
-    { to: "/accounts", label: "Accounts", icon: Users },
-    { to: "/template-studio", label: "Template Studio", icon: Blocks },
-    { to: "/template-library", label: "Template Library", icon: Library },
     { to: "/youtube-upload", label: "YouTube Upload", icon: Youtube },
     { to: "/capcut-export", label: "CapCut Export", icon: Scissors },
     { to: "/settings", label: "Settings", icon: Settings },
     { to: "/support", label: "Support", icon: HelpCircle },
+  ];
+  const breadcrumbLinks = [
+    { to: "/templates", label: "Templates" },
+    { to: "/projects", label: "Dự án" },
+    ...mainNavLinks,
   ];
 
   return (
@@ -672,10 +599,14 @@ export function App() {
           )}
         </div>
 
-        {/* ── ACTIVE PROJECT STEPS ── */}
-        {activeProject && (
-          <ActiveProjectSteps projectId={activeProject.id} />
-        )}
+        <nav className="sidebar-templates-nav">
+          <NavLink to="/templates" className={({isActive}) => "nav-link " + (isActive ? "active" : "")}>
+            <FolderKanban size={18} /> Template
+          </NavLink>
+          <div className="sidebar-project-tree">
+            <SidebarProjectItem project={route.pathname.startsWith('/projects/') && activeProject?.id !== route.pathname.split('/')[2] ? null : activeProject} />
+          </div>
+        </nav>
 
         <div className="sidebar-divider" />
 
@@ -755,13 +686,13 @@ export function App() {
             <span>Studio</span>
             <span className="crumb-slash">/</span>
             <strong>
-              {mainNavLinks.find((l) => route.pathname.startsWith(l.to))
+              {breadcrumbLinks.find((l) => route.pathname.startsWith(l.to))
                 ?.label || "Workspace"}
             </strong>
           </div>
           <div className="topbar-right">
             <span className="server-label">
-              <i /> ProjectX Film Studio
+              <i /> ProjectX Studio
             </span>
             <span className="avatar small">
               {session.user.name.slice(0, 1).toUpperCase()}
@@ -771,35 +702,17 @@ export function App() {
 
         <main className="page-content">
           <Routes>
+            <Route path="/" element={<Navigate to="/templates" replace />} />
+            <Route path="/accounts" element={<Navigate to="/settings" replace />} />
             <Route
-              path="/"
-              element={<Navigate to="/accounts" replace />}
-            />
-            <Route path="/accounts" element={<AccountsPage />} />
-            <Route
-              path="/template-studio"
+              path="/templates"
               element={
                 <Templates notify={setToast} onProjectCreated={setActiveProject} />
               }
             />
-            <Route
-              path="/template-library"
-              element={
-                <Templates
-                  notify={setToast}
-                  libraryMode
-                  onProjectCreated={setActiveProject}
-                />
-              }
-            />
-            <Route
-              path="/projects"
-              element={
-                <Projects
-                  notify={setToast}
-                />
-              }
-            />
+            <Route path="/template-studio" element={<Navigate to="/templates" replace />} />
+            <Route path="/template-library" element={<Navigate to="/templates" replace />} />
+            <Route path="/projects" element={<Projects notify={setToast} />} />
             <Route
               path="/projects/:id"
               element={
@@ -813,13 +726,13 @@ export function App() {
             <Route path="/capcut-export" element={<CapCutExportPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/support" element={<SupportPage />} />
-            <Route path="*" element={<Navigate to="/accounts" replace />} />
+            <Route path="*" element={<Navigate to="/templates" replace />} />
           </Routes>
         </main>
 
         <footer className="app-footer">
-          <span>ProjectX Film Studio</span>
-          <span>AI tự động · Session của bạn · Phim của bạn.</span>
+          <span>ProjectX Studio</span>
+          <span>AI tự động · Dữ liệu của bạn.</span>
         </footer>
       </div>
 
@@ -839,3 +752,4 @@ export function App() {
     </div>
   );
 }
+

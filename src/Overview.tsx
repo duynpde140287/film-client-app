@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+﻿import { useEffect, useState, type FormEvent } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowUpRight,
   ArrowRight,
@@ -91,7 +91,7 @@ export function Overview({ user }: { user: User }) {
             Dành nhiều thời gian hơn cho câu chuyện của bạn.
           </p>
           <Link to="/templates" className="button dark">
-            Khám phá Template Studio <ArrowRight size={17} />
+            Mở Templates <ArrowRight size={17} />
           </Link>
         </div>
         <div className="banner-art" aria-hidden="true">
@@ -203,10 +203,14 @@ export function NewProject({
   open,
   onClose,
   templates,
+  defaultTemplateId,
+  onCreated,
 }: {
   open: boolean;
   onClose: () => void;
   templates: Template[];
+  defaultTemplateId?: string;
+  onCreated?: (project: Project) => void;
 }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false),
@@ -223,6 +227,7 @@ export function NewProject({
         rawStory: form.get("rawStory"),
       });
       onClose();
+      onCreated?.(project);
       navigate("/projects/" + project.id);
     } catch (e) {
       setError((e as Error).message);
@@ -248,7 +253,7 @@ export function NewProject({
           />
         </Field>
         <Field label="Template">
-          <select name="templateId" required defaultValue="">
+          <select name="templateId" required defaultValue={defaultTemplateId || ""}>
             <option value="" disabled>
               Chọn template đã xuất bản
             </option>
@@ -261,13 +266,15 @@ export function NewProject({
               ))}
           </select>
         </Field>
+
+
         <Field
-          label="Nội dung hoặc ý tưởng đầu vào"
-          hint="Đây là nội dung của dự án này. Template sẽ cung cấp cấu trúc và phong cách."
+          label="Nội dung đầu vào"
+          hint="Template giữ cấu trúc, nội dung này dùng cho dự án."
         >
           <textarea
             name="rawStory"
-            rows={7}
+            rows={6}
             placeholder="Dán nội dung, câu chuyện hoặc mô tả chi tiết chủ đề bạn muốn thực hiện…"
             required
             minLength={10}
@@ -292,9 +299,11 @@ export function Projects({ notify: _notify }: { notify: (s: string) => void }) {
   const templates = useRemote<Template[]>("/templates");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [searchParams] = useSearchParams();
   const [create, setCreate] = useState(
-    new URLSearchParams(location.search).has("new"),
+    searchParams.has("new"),
   );
+  useEffect(() => { if (searchParams.has("new")) setCreate(true); }, [searchParams]);
   const visible = data?.filter(
     (p) =>
       (filter === "all" || p.status === filter) &&

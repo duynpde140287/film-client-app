@@ -1,16 +1,17 @@
 {
-  "name": "storyflow-studio",
+  "name": "projectx-client-app",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "start": "vite --host 127.0.0.1 --port 5173 --strictPort",
-    "admin": "npm run start:admin",
-    "start:admin": "vite --host 127.0.0.1 --port 5174 --strictPort",
-    "build": "tsc -b && vite build",
+    "dev": "node --max-old-space-size=1024 --max-semi-space-size=8 scripts/desktop.mjs --dev",
+    "start": "node scripts/desktop.mjs",
+    "start:dev": "node --max-old-space-size=1024 --max-semi-space-size=8 scripts/desktop.mjs --dev",
+    "build": "node --max-old-space-size=1024 --max-semi-space-size=8 ./node_modules/vite/bin/vite.js build",
     "desktop": "node scripts/desktop.mjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test:ui": "node --max-old-space-size=192 scripts/check-ui.mjs"
+    "test:ui": "node --max-old-space-size=1024 --max-semi-space-size=8 scripts/check-ui.mjs",
+    "package:win": "npm run build && node --max-old-space-size=1024 --max-semi-space-size=8 scripts/package-win.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",

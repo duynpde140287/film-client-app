@@ -6,3 +6,7 @@ desktop/package.runtime.json
 .npm-cache/
 test-results/
 release/
+
+/desktop/app/
+/release/
+*.tsbuildinfo
