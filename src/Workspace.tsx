@@ -18,6 +18,7 @@ import {
   Layers3,
   ChevronRight,
   Scissors,
+  Bot,
 } from "lucide-react";
 import { api } from "./api";
 import { useRemote } from "./hooks";
@@ -130,7 +131,7 @@ export function Workspace({
   onActivate?: (project: Project | null) => void;
 }) {
   const { id } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const path = "/projects/" + id;
   const {
     data: project,
@@ -144,13 +145,13 @@ export function Workspace({
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
     [filter, setFilter] = useState("all"),
-    [override, setOverride] = useState("");
+    [overrides, setOverrides] = useState<Record<number, string>>({}),
+    [runTarget, setRunTarget] = useState("full");
+  useEffect(() => { setTab(defaultTab); }, [defaultTab]);
 
-  // Báo sidebar biết project đang active
-  useEffect(() => {
-    if (project && onActivate) onActivate(project);
-    return () => { if (onActivate) onActivate(null); };
-  }, [project?.id]);
+  useEffect(() => { if (project && project.id === id) onActivate?.(project); else if (loadError) onActivate?.(null); }, [project, id, loadError, onActivate]);
+
+  useEffect(() => { setOverrides({}); }, [id]);
 
   async function command(
     action: string,
@@ -161,13 +162,19 @@ export function Workspace({
     setError("");
     try {
       await api(path + "/" + action, "POST", body);
-      setData(await api<Project>(path));
+      const refreshed = await api<Project>(path);
+      setData(refreshed);
+      if (action.startsWith("steps/")) setStepNo(refreshed.suggestedStep);
       notify(message);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy("");
     }
+  }
+
+  async function triggerAutoRun() {
+    await command("scripts/run", {target: runTarget}, "Đã xếp hàng tạo script.");
   }
   if (!project)
     return loadError ? <ErrorBox message={loadError} /> : <Loading />;
@@ -178,13 +185,23 @@ export function Workspace({
   );
   const exportJob = project.exports.find((j) => j.status === "DONE");
   const actionable = project.actions?.[tab];
+  const actionReasons = (tab === "script" ? project.actions?.scripts : project.actions?.[tab])?.reasons || [];
+  const needsChatGpt = actionReasons.some((reason) => /chatgpt|gpt/i.test(reason));
+  const needsVeo3 = actionReasons.some((reason) => /veo\s*3|veo3/i.test(reason));
+  const scriptsReady = project.actions?.scripts?.ready !== false;
+  const scriptsReasons = project.actions?.scripts?.reasons || [];
+  const selectedScriptTarget = runTarget.trim().toLowerCase();
+  const scriptTargetNo =
+    selectedScriptTarget === "full"
+      ? 5
+      : Math.min(5, Math.max(1, Number(selectedScriptTarget) || 1));
   const tabs = [
     { id: "script", label: "Script", icon: FileText },
     { id: "voice", label: "Voice", icon: Mic },
-    { id: "image", label: "Hình ảnh", icon: ImageIcon },
+    { id: "image", label: "Image", icon: ImageIcon },
     { id: "video", label: "Video", icon: Video },
     { id: "capcut", label: "CapCut", icon: Scissors },
-    { id: "export", label: "QC & Xuất", icon: Download },
+    { id: "export", label: "Export", icon: Download },
   ];
   return (
     <>
@@ -228,8 +245,69 @@ export function Workspace({
                 void command("run", {}, "Quy trình tự động đã vào hàng đợi.")
               }
             >
-              {busy === "run" ? <Spinner /> : <Sparkles size={17} />} Chạy tự
-              động
+              {busy === "run" ? <Spinner /> : <Sparkles size={17} />} Auto video
+            </button>
+          )}
+          {needsChatGpt && (
+            <Link className="button compact provider-cta" to="/settings">
+              <Bot size={15} /> Đăng nhập ChatGPT
+            </Link>
+          )}
+          {needsVeo3 && (
+            <Link className="button compact provider-cta" to="/settings">
+              <Video size={15} /> Đăng nhập Veo 3
+            </Link>
+          )}
+        </div>
+      </div>
+      <div className="auto-run-bar step-run-card">
+        <div className="auto-run-label">
+          <Sparkles size={17} className="text-accent" />
+          <div>
+            <strong>Chạy script</strong>
+            <span>{selectedScriptTarget === "full" ? "Full 5 step" : `Đến Step ${scriptTargetNo}`}</span>
+          </div>
+        </div>
+        <div className="milestone-track" role="radiogroup" aria-label="Chọn mốc tạo script">
+          {[1, 2, 3, 4, 5].map((no) => (
+            <button
+              type="button"
+              key={no}
+              className={`milestone-chip ${scriptTargetNo >= no ? "is-checked" : ""} ${selectedScriptTarget === String(no) ? "is-current" : ""}`}
+              onClick={() => setRunTarget(String(no))}
+              disabled={running || !!busy}
+            >
+              <span>{scriptTargetNo >= no ? <Check size={13} /> : no}</span>
+              <small>{no === 1 ? "1" : `1-${no}`}</small>
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`button compact ${selectedScriptTarget === "full" ? "primary" : ""}`}
+          onClick={() => setRunTarget("full")}
+          disabled={running || !!busy}
+        >
+          Full
+        </button>
+        <div className="auto-run-actions">
+          {running ? (
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() =>
+                void command("pause", {}, "Sẽ tạm dừng sau tác vụ hiện tại.")
+              }
+            >
+              <Pause size={16} /> Tạm dừng
+            </button>
+          ) : (
+            <button
+              className="button primary"
+              disabled={!!busy || !project.actions?.scripts.ready}
+              onClick={() => void triggerAutoRun()}
+            >
+              {busy === "scripts/run" || busy === "run" ? <Spinner /> : <Play size={16} />} Chạy
             </button>
           )}
         </div>
@@ -254,7 +332,7 @@ export function Workspace({
                 {{
                   script: "Nội dung",
                   voice: "Voice",
-                  image: "Hình ảnh",
+                  image: "Image",
                   video: "Video",
                 }[kind] || kind}
               </strong>
@@ -277,6 +355,7 @@ export function Workspace({
             key={t.id}
             onClick={() => {
               setTab(t.id);
+              setSearchParams({tab: t.id});
               setFilter("all");
             }}
             className={tab === t.id ? "active" : ""}
@@ -301,114 +380,179 @@ export function Workspace({
         </span>
       </div>
       {tab === "script" ? (
-        <div className="script-workspace">
-          <aside className="step-nav">
-            <span className="nav-label">QUY TRÌNH NỘI DUNG</span>
-            {project.steps.map((step) => (
-              <button
-                className={stepNo === step.stepNo ? "selected" : ""}
-                key={step.stepNo}
-                onClick={() => {
-                  setStepNo(step.stepNo);
-                  setOverride("");
-                }}
-              >
-                <span
-                  className={
-                    "step-index " + (step.status === "DONE" ? "done" : "")
-                  }
+        <div className="script-workspace-rows">
+          <div className="script-step-list-header">
+            <span className="col-header col-input">Văn bản đầu vào (Input)</span>
+            <span className="col-header col-action">Thao tác tạo script</span>
+            <span className="col-header col-output">Văn bản đầu ra (Output)</span>
+          </div>
+          <div className="script-step-rows">
+            {project.steps.map((step) => {
+              const sNo = step.stepNo;
+              const hasOutput = !!step.output;
+              const isStepBusy = busy === `steps/${sNo}/run`;
+              const currentInput = overrides[sNo] !== undefined ? overrides[sNo] : (step.inputSuggestion || "");
+              const isReady = step.readiness.ready;
+              const sourceLabel =
+                sNo === 1
+                  ? "Nội dung dự án (Raw Story)"
+                  : sNo === 2
+                    ? "Dữ liệu Step 1 (Story)"
+                    : sNo === 3
+                      ? "Dữ liệu Step 2 (Character)"
+                      : sNo === 4
+                        ? "Dữ liệu gợi ý từ Step 3 (Outline)"
+                        : "Dữ liệu gợi ý từ Step 3 (Outline)";
+
+              return (
+                <div
+                  key={sNo}
+                  className={`script-step-card ${hasOutput ? "is-done" : isReady ? "is-ready" : "is-waiting"} ${stepNo === sNo ? "is-selected" : ""}`}
                 >
-                  {step.status === "DONE" ? <Check size={15} /> : step.stepNo}
-                </span>
-                <div>
-                  <strong>{step.name}</strong>
-                  <small>
-                    {step.status === "DONE"
-                      ? `Phiên bản ${step.version}`
-                      : step.status === "RUNNING"
-                        ? "Đang xử lý"
-                        : step.readiness.ready
-                          ? "Sẵn sàng chạy"
-                          : "Chờ đầu vào"}
-                  </small>
+                  <div className="script-step-header-bar">
+                    <div className="step-title-box">
+                      <span className={`step-badge-num ${hasOutput ? "done" : ""}`}>
+                        {hasOutput ? <Check size={14} /> : sNo}
+                      </span>
+                      <strong className="step-name">Bước {sNo}: {step.name}</strong>
+                      <span className="step-source-tag">{sourceLabel}</span>
+                    </div>
+                    <div className="step-status-box">
+                      {step.status === "DONE" ? (
+                        <span className="status-tag done">Hoàn tất (v{step.version})</span>
+                      ) : step.status === "RUNNING" ? (
+                        <span className="status-tag running">Đang xử lý</span>
+                      ) : isReady ? (
+                        <span className="status-tag ready">Sẵn sàng tạo</span>
+                      ) : (
+                        <span className="status-tag waiting">Chờ bước trước</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="script-step-body">
+                    {/* Cột 1: Text đầu vào */}
+                    <div className="step-col col-input">
+                      <div className="col-title-bar">
+                        <label className="col-title" htmlFor={`step-input-${sNo}`}>
+                          Text đầu vào
+                        </label>
+                        {overrides[sNo] !== undefined && overrides[sNo] !== (step.inputSuggestion || "") && (
+                          <button
+                            type="button"
+                            className="button mini-btn text-btn"
+                            onClick={() => {
+                              setOverrides((prev) => {
+                                const next = { ...prev };
+                                delete next[sNo];
+                                return next;
+                              });
+                            }}
+                          >
+                            Dùng lại gợi ý
+                          </button>
+                        )}
+                      </div>
+                      <div className="step-input-wrapper">
+                        <textarea
+                          id={`step-input-${sNo}`}
+                          className="step-textarea"
+                          rows={6}
+                          value={currentInput}
+                          placeholder={
+                            isReady
+                              ? "Tự nạp theo luồng Step."
+                              : `Cần hoàn thành các bước trước (${step.readiness.reasons.join(", ")})`
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setOverrides((prev) => ({ ...prev, [sNo]: val }));
+                          }}
+                          disabled={running || !!busy}
+                        />
+                      </div>
+                      {!isReady && !hasOutput && (
+                        <div className="readiness-mini-note">
+                          <Clock3 size={13} />
+                          <span>{step.readiness.reasons.join(" · ")}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cột 2 (Ở giữa): Nút tạo script step */}
+                    <div className="step-col col-action">
+                      <div className="action-connector-line" />
+                      <div className="action-button-box">
+                        <button
+                          type="button"
+                          className={`button step-action-btn ${hasOutput ? "btn-rerun" : "primary"}`}
+                          disabled={!!busy || running || !isReady || !scriptsReady}
+                          onClick={() => {
+                            setStepNo(sNo);
+                            const hasCustomInput =
+                              overrides[sNo] !== undefined &&
+                              overrides[sNo] !== (step.inputSuggestion || "");
+                            void command(
+                              `steps/${sNo}/run`,
+                              hasCustomInput ? { inputOverride: currentInput } : {},
+                              `Đã tạo script cho Bước ${sNo} (${step.name})`,
+                            );
+                          }}
+                          title={
+                            !scriptsReady
+                              ? scriptsReasons.join("\n")
+                              : !isReady
+                                ? step.readiness.reasons.join("\n")
+                                : hasOutput
+                                  ? `Chạy lại script Bước ${sNo}`
+                                  : `Tạo script Bước ${sNo}`
+                          }
+                        >
+                          {isStepBusy ? (
+                            <Spinner />
+                          ) : hasOutput ? (
+                            <RefreshCw size={15} />
+                          ) : (
+                            <Play size={15} />
+                          )}
+                          <span>{hasOutput ? `Chạy lại B${sNo}` : `Tạo Step ${sNo}`}</span>
+                        </button>
+                        <span className="action-step-badge">Step {sNo}</span>
+                      </div>
+                      <div className="action-connector-line" />
+                    </div>
+
+                    {/* Cột 3: Text đầu ra */}
+                    <div className="step-col col-output">
+                      <div className="col-title-bar">
+                        <span className="col-title">Text đầu ra</span>
+                        {hasOutput && (
+                          <span className="output-status-pill">Đã sinh script</span>
+                        )}
+                      </div>
+                      <div className="step-output-wrapper">
+                        {step.error ? (
+                          <ErrorBox message={step.error.message} />
+                        ) : hasOutput ? (
+                          <div className="output-scroll-box">
+                            <Output step={step} />
+                          </div>
+                        ) : (
+                          <div className="output-empty-box">
+                            <span className="muted">
+                              {isReady
+                                ? `Chưa có script Step ${sNo}.`
+                                : `Chờ mở khóa Step ${sNo}.`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <ChevronRight size={15} />
-              </button>
-            ))}
-            <div className="step-note">
-              <Layers3 size={18} />
-              <p>
-                Các cảnh được xác lập ở bước 3 và giữ đồng bộ xuyên suốt quy
-                trình.
-              </p>
-            </div>
-          </aside>
-          <section className="step-panel">
-            <div className="step-panel-heading">
-              <div>
-                <span className="eyebrow">
-                  STEP {String(activeStep.stepNo).padStart(2, "0")}
-                </span>
-                <h2>{activeStep.name}</h2>
-              </div>
-              <button
-                className="button primary"
-                disabled={!!busy || running || !activeStep.readiness.ready}
-                onClick={() =>
-                  void command(
-                    `steps/${stepNo}/run`,
-                    override ? { inputOverride: override } : {},
-                    "Đã lưu kết quả bước " + stepNo,
-                  )
-                }
-              >
-                {busy.startsWith("steps/") ? (
-                  <Spinner />
-                ) : activeStep.version ? (
-                  <RefreshCw size={16} />
-                ) : (
-                  <Play size={16} />
-                )}{" "}
-                {activeStep.version ? "Chạy lại bước" : "Tạo nội dung"}
-              </button>
-            </div>
-            {!activeStep.readiness.ready && (
-              <div className="readiness-note">
-                <Clock3 size={16} />
-                {activeStep.readiness.reasons.join(" · ")}
-              </div>
-            )}
-            <ErrorBox message={activeStep.error?.message} />
-            <div className="step-content">
-              <Output step={activeStep} />
-            </div>
-            <details className="advanced">
-              <summary>
-                Đầu vào & dữ liệu chi tiết <ChevronDown size={15} />
-              </summary>
-              <h4>Nội dung dự án</h4>
-              <p className="raw-story">{project.rawStory}</p>
-              <label className="field">
-                <span>Đầu vào tùy chỉnh cho lần chạy này (tùy chọn)</span>
-                <textarea
-                  value={override}
-                  onChange={(e) => setOverride(e.target.value)}
-                  placeholder="Để trống để sử dụng đầu vào hiện có."
-                  rows={4}
-                />
-              </label>
-              <details>
-                <summary>Đầu vào từ các bước trước</summary>
-                <pre className="code-view">{activeStep.inputSuggestion}</pre>
-              </details>
-              {activeStep.output && (
-                <details>
-                  <summary>Kết quả có cấu trúc</summary>
-                  <JsonView value={activeStep.output} />
-                </details>
-              )}
-            </details>
-          </section>
+              );
+            })}
+          </div>
         </div>
       ) : tab === "capcut" ? (
         <div className="placeholder-page">
@@ -662,3 +806,5 @@ export function Workspace({
     </>
   );
 }
+
+

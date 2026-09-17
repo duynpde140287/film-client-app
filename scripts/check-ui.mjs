@@ -1,287 +1,87 @@
-import { chromium } from "@playwright/test";
-import { createServer } from "node:http";
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
-import { resolve, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
-import assert from "node:assert/strict";
-import { setTimeout as delay } from "node:timers/promises";
+import { chromium, expect } from '@playwright/test';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { resolve, join, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createServer } from 'node:net';
+import { ensureSdk, sdkExecutable } from './setup-sdk.mjs';
 
-const root = fileURLToPath(new URL("../", import.meta.url));
-const backend = process.env.E2E_BACKEND_DIR || resolve(root, "../backend");
-const out = join(root, "test-results");
-await mkdir(out, { recursive: true });
-const storage = await mkdtemp(join(out, "database-"));
-const password = randomBytes(24).toString("hex");
-const apiUrl = "http://127.0.0.1:3102/api",
-  webUrl = "http://127.0.0.1:5175";
-const server = spawn(process.execPath, ["dist/main.js"], {
-  cwd: backend,
-  env: {
-    ...process.env,
-    PORT: "3102",
-    HOST: "127.0.0.1",
-    DB_TYPE: "sqljs",
-    STORAGE_DIR: storage,
-    PROVIDER_MODE: "demo",
-    SEED_DEMO: "true",
-    ADMIN_EMAIL: "admin@ui.test",
-    ADMIN_PASSWORD: password,
-    DEMO_USER_EMAIL: "creator@ui.test",
-    DEMO_USER_PASSWORD: password,
-    JWT_SECRET: randomBytes(32).toString("hex"),
-    CORS_ORIGINS: webUrl,
-  },
-  windowsHide: true,
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let logs = "";
-server.stdout.on("data", (b) => (logs += b));
-server.stderr.on("data", (b) => (logs += b));
-let vite, browser;
-const errors = [];
-async function noOverflow(page) {
-  assert.ok(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth + 1,
-    ),
-    "Page overflows horizontally",
-  );
-}
+const root=fileURLToPath(new URL('../',import.meta.url));
+const out=resolve(root,'test-results');
+await mkdir(out,{recursive:true});
+await ensureSdk();
+const profile=await mkdtemp(join(out,'nw-client-smoke-'));
+const portProbe=createServer();
+await new Promise(r=>portProbe.listen(0,'127.0.0.1',r));
+const port=portProbe.address().port;
+await new Promise(r=>portProbe.close(r));
+const env={...process.env}; delete env.NODE_OPTIONS;
+const child=spawn(sdkExecutable,[join(root,'desktop'),'--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port='+port],{cwd:root,env,windowsHide:false,stdio:['ignore','pipe','pipe']});
+let logs='',browser;
+child.stdout.on('data',b=>logs=(logs+b).slice(-10000));
+child.stderr.on('data',b=>logs=(logs+b).slice(-10000));
+const errors=[];
 try {
-  for (let i = 0; i < 100; i++) {
-    try {
-      if ((await fetch(apiUrl + "/health")).ok) break;
-    } catch {}
-    if (i === 99) throw Error("API startup failed: " + logs);
+  for(let i=0;i<100;i++) {
+    if(child.exitCode!==null)throw Error('NW.js exited: '+logs);
+    try {browser=await chromium.connectOverCDP('http://127.0.0.1:'+port);break;}catch{}
+    await delay(200);
+  }
+  if(!browser)throw Error('NW.js debug endpoint unavailable: '+logs);
+  const context=browser.contexts()[0];
+  const user={id:'native-test',username:'fixture',name:'Native test',is_admin:0,enabled:true,activeFrom:'2020-01-01',expiresAt:'2099-01-01',licenseStatus:'ACTIVE'};
+  await context.route('**/api/**',async route=>{
+    const request=route.request(),path=new URL(request.url()).pathname.replace(/^\/api/,'');
+    if(request.method()==='OPTIONS')return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'*'}});
+    let data=[];
+    if(path==='/auth/login')data={token:'isolated-native-fixture',refreshToken:'fixture',user};
+    if(path==='/auth/me')data=user;
+    if(path.startsWith('/provider-sessions/'))data={available:false,status:'MISSING_SESSION'};
+    if(path==='/ai-sessions')data=[{provider:'chatgpt',label:'ChatGPT',connected:false},{provider:'veo3',label:'Veo 3',connected:false}];
+    if(path==='/template-import-policy')data={imageAccept:'.png,.jpg,.webp',maxImageBytes:10485760,maxStyleImages:6};
+    await route.fulfill({json:{data},headers:{'Access-Control-Allow-Origin':'*'}});
+  });
+  let page;
+  for(let i=0;i<100;i++) {
+    page=context.pages().find(p=>p.url().startsWith('chrome-extension://projectx-studio'));
+    if(page)break;
     await delay(100);
   }
-  vite = createServer(async (req, res) => {
-    try {
-      const pathname = new URL(req.url, webUrl).pathname;
-      const name = pathname.startsWith("/assets/")
-        ? pathname.slice(1)
-        : "index.html";
-      const body = await readFile(join(root, "dist", name));
-      res.setHeader(
-        "Content-Type",
-        name.endsWith(".js")
-          ? "application/javascript"
-          : name.endsWith(".css")
-            ? "text/css"
-            : "text/html",
-      );
-      res.end(body);
-    } catch {
-      res.statusCode = 404;
-      res.end();
-    }
+  if(!page)throw Error('Desktop page not found');
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.reload();
+  await expect(page.getByPlaceholder('Nhập tài khoản của bạn')).toBeVisible();
+  expect(await page.evaluate(()=>typeof window.require)).toBe('undefined');
+  expect(new URL(page.url()).protocol).toBe('chrome-extension:');
+  const passwordBox=await page.locator('input[name="password"]').boundingBox();
+  const loginBox=await page.locator('button[type="submit"],button.login-submit').boundingBox();
+  expect(loginBox.y-(passwordBox.y+passwordBox.height)).toBeGreaterThanOrEqual(8);
+  await page.locator('input[name="username"]').fill('fixture');
+  await page.locator('input[name="password"]').fill('FixtureOnly123!');
+  await page.locator('button[type="submit"],button.login-submit').click();
+  await expect(page.getByRole('heading',{name:'Template cá nhân'})).toBeVisible();
+  await expect(page.locator('a[href*="admin"]')).toHaveCount(0);
+  await page.screenshot({path:join(out,'client-native.png')});
+  // A manipulated local session must return to login even before any API call.
+  await page.evaluate(()=>{
+    const key='projectx.creator.session';
+    const session=JSON.parse(sessionStorage.getItem(key));
+    session.user.is_admin=1; sessionStorage.setItem(key,JSON.stringify(session));
   });
-  await new Promise((r) => vite.listen(5175, "127.0.0.1", r));
-  browser = await chromium.launch({
-    channel:
-      process.env.BROWSER_CHANNEL ||
-      (process.platform === "win32" ? "msedge" : undefined),
-    headless: true,
-  });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1040 },
-    reducedMotion: "reduce",
-  });
-  const page = await context.newPage();
-  await page.route("http://127.0.0.1:3000/api/**", (route) =>
-    route.continue({
-      url: route.request().url().replace("http://127.0.0.1:3000/api", apiUrl),
-    }),
-  );
-  page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(webUrl);
-  await page.getByLabel("Email", { exact: true }).fill("creator@ui.test");
-  await page.getByLabel("Mật khẩu", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Vào Studio" }).click();
-  await page
-    .getByRole("heading", { name: "Hôm nay, bạn muốn kể điều gì?" })
-    .waitFor();
-  await page.getByText("Vòng tuần hoàn của nước", { exact: true }).waitFor();
-  await noOverflow(page);
-  await page.screenshot({
-    path: join(out, "desktop-overview.png"),
-    fullPage: true,
-  });
-  await page
-    .getByRole("link", { name: "Template Studio", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Tạo template", exact: true }).click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("Tên template", { exact: true }).fill("Khoa học UI");
-  await dialog.getByLabel("Chủ đề / lĩnh vực").fill("Giáo dục");
-  await dialog
-    .getByLabel("Yêu cầu nội dung", { exact: true })
-    .fill("Giải thích một ý tưởng khoa học bằng ví dụ dễ hiểu.");
-  await dialog.getByLabel("Phong cách hình ảnh").fill("Minh họa đơn giản");
-  await dialog.getByLabel("Tổng thời lượng (giây)").fill("4");
-  await dialog.getByLabel("Mỗi cảnh (giây)").fill("2");
-  await dialog
-    .getByRole("button", { name: "Dựng template", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Xuất bản template", exact: true })
-    .waitFor();
-  await page.getByRole("button", { name: "Step 5", exact: true }).click();
-  await page
-    .getByText("CHILD_STEP_5_IMAGE_VIDEO_PROMPTS_SYSTEM.txt", { exact: true })
-    .waitFor();
-  await page.screenshot({
-    path: join(out, "template-child-preview.png"),
-    fullPage: true,
-  });
-  await page
-    .getByRole("button", { name: "Xuất bản template", exact: true })
-    .click();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Đóng", exact: true })
-    .click();
-  await page.getByRole("link", { name: "Dự án của tôi", exact: true }).click();
-  await page.getByRole("button", { name: "Tạo dự án", exact: true }).click();
-  await page
-    .getByLabel("Tên dự án", { exact: true })
-    .fill("Vòng tuần hoàn — kiểm thử UI");
-  await page
-    .getByLabel("Template", { exact: true })
-    .selectOption({ label: "Khoa học UI" });
-  await page
-    .getByLabel("Nội dung hoặc ý tưởng đầu vào", { exact: true })
-    .fill(
-      "Nước bốc hơi thành mây, ngưng tụ rồi trở lại mặt đất qua những cơn mưa.",
-    );
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Tạo dự án", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Chạy tự động", exact: true }).click();
-  await page
-    .getByRole("button", { name: "QC & Xuất bản", exact: true })
-    .click();
-  await page
-    .getByRole("link", { name: "Tải xuống", exact: true })
-    .waitFor({ timeout: 120000 });
-  await page.screenshot({
-    path: join(out, "desktop-export.png"),
-    fullPage: true,
-  });
-  assert.ok(
-    await page.locator("video").evaluate((el) => el.readyState > 0),
-    "Export video metadata did not load",
-  );
-  await page.getByRole("button", { name: /Voice/ }).click();
-  await page.locator("audio").first().waitFor();
-  await page
-    .getByRole("button", { name: "Tạo lại", exact: true })
-    .first()
-    .click();
-  await page
-    .getByRole("status")
-    .filter({ hasText: "Đã xếp hàng cảnh 1" })
-    .waitFor();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await noOverflow(page);
-  await page.screenshot({
-    path: join(out, "mobile-voice.png"),
-    fullPage: true,
-  });
-  await page.getByRole("button", { name: "Mở menu", exact: true }).click();
-  await page.getByRole("link", { name: "Tổng quan", exact: true }).click();
-  await page
-    .getByRole("heading", { name: "Hôm nay, bạn muốn kể điều gì?" })
-    .waitFor();
-  await noOverflow(page);
-  await page.screenshot({
-    path: join(out, "mobile-overview.png"),
-    fullPage: true,
-  });
-  await page.setViewportSize({ width: 1440, height: 1040 });
-  await page.goto(webUrl + "/admin");
-  await page.getByLabel("Email", { exact: true }).fill("admin@ui.test");
-  await page.getByLabel("Mật khẩu", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Vào trang quản trị" }).click();
-  await page
-    .getByRole("heading", { name: "Khách hàng", exact: true })
-    .waitFor();
-  await page
-    .getByRole("button", { name: "Tạo tài khoản", exact: true })
-    .click();
-  await page.getByLabel("Tên khách hàng").fill("Khách UI");
-  await page.getByLabel("Email", { exact: true }).fill("customer@ui.test");
-  await page.getByLabel("Mật khẩu", { exact: true }).fill(password);
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Tạo tài khoản", exact: true })
-    .click();
-  await page.getByText("customer@ui.test", { exact: true }).waitFor();
-  await page
-    .getByRole("row")
-    .filter({ hasText: "customer@ui.test" })
-    .getByRole("button", { name: "Quản lý" })
-    .click();
-  await page.getByRole("button", { name: "Gia hạn", exact: true }).click();
-  await page.getByRole("button", { name: "Khóa", exact: true }).click();
-  await page.getByRole("button", { name: "Mở lại", exact: true }).waitFor();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Đóng", exact: true })
-    .click();
-  await page.screenshot({
-    path: join(out, "admin-customers.png"),
-    fullPage: true,
-  });
-  await page
-    .getByRole("link", { name: "Hỗ trợ template", exact: true })
-    .click();
-  await page
-    .getByRole("heading", { name: "Khoa học UI", exact: true })
-    .waitFor();
-  assert.deepEqual(errors, [], "Browser runtime errors");
-  await writeFile(
-    join(out, "report.json"),
-    JSON.stringify(
-      {
-        passed: true,
-        checkedAt: new Date().toISOString(),
-        screenshots: [
-          "desktop-overview.png",
-          "template-child-preview.png",
-          "desktop-export.png",
-          "mobile-voice.png",
-          "mobile-overview.png",
-          "admin-customers.png",
-        ],
-        checks: [
-          "creator login",
-          "template build and five-child preview",
-          "publish",
-          "project creation",
-          "full automation",
-          "MP4 preview",
-          "single scene retry",
-          "mobile navigation and overflow",
-          "admin login",
-          "customer creation/extend/disable",
-          "admin template support",
-        ],
-        browserErrors: errors,
-      },
-      null,
-      2,
-    ),
-  );
-  console.log(
-    "UI PASS: desktop, mobile, template/project creation, automation, MP4 preview, retry and admin management.",
-  );
+  await page.reload();
+  await expect(page.getByPlaceholder('Nhập tài khoản của bạn')).toBeVisible();
+  await delay(1500);
+  expect(child.exitCode).toBe(null);
+  expect(errors).toEqual([]);
+  await writeFile(join(out,'client-native-report.json'),JSON.stringify({passed:true,fixture:true,checks:['NW.js native window','node disabled in renderer','login spacing','customer session only','no admin menu','window remains open'],checkedAt:new Date().toISOString()},null,2));
+  console.log('PASS: NW.js native window, login layout, numeric is_admin client guard, no admin menu, no renderer errors. Isolated API fixture; no customer DB modified.');
 } finally {
-  await browser?.close();
-  if (vite) await new Promise((r) => vite.close(r));
-  server.kill();
-  await delay(200);
+  await browser?.close().catch(()=>{});
+  if(child.exitCode===null) {
+    if(process.platform==='win32')spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});
+    else child.kill();
+  }
+  if(!profile.startsWith(out+sep+'nw-client-smoke-'))throw Error('Unsafe fixture cleanup');
+  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:300});
 }

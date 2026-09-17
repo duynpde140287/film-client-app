@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from './services/api.service';
+import { api } from '../services/api.service';
 
 export function useRemote<T>(path: string, revision = 0, poll = 0) {
   const [data, setData] = useState<T>();
@@ -37,5 +37,3 @@ export function useRemote<T>(path: string, revision = 0, poll = 0) {
 
   return { data, error, setData };
 }
-
-export * from './hooks/index';

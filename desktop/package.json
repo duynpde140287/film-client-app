@@ -1,14 +1,16 @@
 {
-  "name": "storyflow-studio-desktop",
-  "main": "http://127.0.0.1:5173",
+  "name": "projectx-client-app-desktop",
+  "main": "app/index.html",
   "nodejs": false,
   "window": {
-    "title": "StoryFlow Studio",
+    "title": "ProjectX Studio",
     "width": 1440,
     "height": 960,
-    "min_width": 880,
-    "min_height": 640,
+    "min_width": 720,
+    "min_height": 600,
     "position": "center",
     "show": true
-  }
+  },
+  "chromium-args": "--disable-gpu-process-crash-limit --disable-direct-composition-video-overlays --js-flags=--max-old-space-size=1024",
+  "domain": "projectx-studio"
 }
