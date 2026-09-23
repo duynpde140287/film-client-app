@@ -8,7 +8,6 @@ export function useRemote<T>(path: string, revision = 0, poll = 0) {
   useEffect(() => {
     let live = true;
     let running = false;
-    setData(undefined);
     setError('');
 
     const load = async () => {
