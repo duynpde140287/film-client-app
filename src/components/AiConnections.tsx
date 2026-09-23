@@ -1,112 +1,86 @@
-import { useEffect, useState } from "react";
-import { Wifi, WifiOff } from "lucide-react";
-import { api } from "../api";
+import { useEffect, useState } from 'react';
+import { Wifi, WifiOff, RefreshCw, LogIn } from 'lucide-react';
+import { api } from '../api';
+import { useAiLogin } from '../hooks/useAiLogin';
 
-type Connection = { provider: string; label: string; connected: boolean; description?: string };
-type Attempt = { id: string; status: string; message?: string };
+type Connection = {
+  provider: string; label: string; connected: boolean; status: string; message?: string;
+  browser?: 'Chrome' | 'Edge' | null;
+  usage?: { remainingPercent: number | null };
+};
+const supported = (rows: Connection[]) => rows.filter(row => ['gemini', 'chatgpt', 'veo3', 'notebooklm', 'onimivoice'].includes(row.provider));
+const groups = [
+  { id: 'google', label: 'Google', loginProvider: 'gemini', services: ['gemini', 'veo3', 'notebooklm'] },
+  { id: 'chatgpt', label: 'ChatGPT', loginProvider: 'chatgpt', services: ['chatgpt'] },
+  { id: 'onimivoice', label: 'OmniVoice', loginProvider: 'onimivoice', services: ['onimivoice'] },
+];
+
+function AccountStatus({ connection }: { connection: Connection }) {
+  return <div className="ai-account-status" data-provider={connection.provider}>
+    <span className={connection.connected ? 'ai-status-connected' : 'ai-status-missing'}>
+      {connection.connected ? <Wifi size={15} /> : <WifiOff size={15} />}
+      {connection.connected ? 'Đã đăng nhập' : 'Chưa đăng nhập'}
+    </span>
+    {!connection.connected && connection.message && <small>{connection.message}</small>}
+    {connection.connected && <small>Phiên đang dùng: {connection.browser || 'chưa xác định'}</small>}
+    <small>{connection.usage?.remainingPercent == null ? 'Usage: chưa có dữ liệu' : `Còn ${connection.usage.remainingPercent}%`}</small>
+  </div>;
+}
+
 export function AiConnections() {
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const { attempt, login, cancel, busy: loginBusy, error: loginError } = useAiLogin();
   const [busy, setBusy] = useState(false);
-  const [revision, setRevision] = useState(0);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
   useEffect(() => {
     let active = true;
-    api<Connection[]>("/ai-sessions").then(rows => {
-      if (active) setConnections(rows.filter(r => ["gemini", "onimivoice", "chatgpt", "veo3"].includes(r.provider)));
-    })
-      .catch(e => { if (active) setError(e.message); });
-    return () => { active = false; };
-  }, [revision]);
-  useEffect(() => {
-    if (!attempt) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const next = await api<Attempt>("/provider-logins/" + attempt.id);
-        if (!active) return;
-        if (next.status === "PENDING") { timer = setTimeout(poll, 2000); return; }
-        setAttempt(null);
-        if (next.status === "CONNECTED") { setRevision(n => n + 1); setMessage("Đăng nhập thành công."); }
-        else setError(next.message || "Đăng nhập thất bại.");
-      } catch (e) { if (active) { setAttempt(null); setError((e as Error).message); } }
+    const refresh = () => {
+      api<Connection[]>('/ai-sessions').then(rows => { if (active) setConnections(supported(rows)); })
+        .catch(e => { if (active) setError(e.message); });
     };
-    timer = setTimeout(poll, 1500);
-    return () => { active = false; clearTimeout(timer); };
-  }, [attempt?.id]);
-  async function login(provider: string) {
-    setBusy(true); setError(""); setMessage("");
-    try { setAttempt(await api<Attempt>("/provider-logins", "POST", { provider })); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  }
-  async function openBrowser(provider: string) {
-    setError(''); setMessage('');
-    try { await api('/provider-logins/open-browser', 'POST', {provider}); setMessage('Đăng nhập trên trình duyệt, rồi nhập file cookie JSON để xác minh.'); }
-    catch(e) { setError((e as Error).message); }
-  }
-  async function importSession(provider: string, file?: File) {
-    if (!file) return;
-    setBusy(true); setError(''); setMessage('');
+    refresh();
+    window.addEventListener('ai-status-change', refresh);
+    return () => { active = false; window.removeEventListener('ai-status-change', refresh); };
+  }, []);
+
+  async function check() {
+    setBusy(true); setError('');
     try {
-      if (file.size > 262144) throw new Error('File cookie tối đa 256 KB.');
-      const session = await file.text();
-      JSON.parse(session);
-      await api('/provider-logins/verify', 'POST', {provider, session});
-      setRevision(n => n + 1); setMessage('Liên kết thành công.');
-    } catch(e) { setError(e instanceof SyntaxError ? 'Chọn file cookie JSON hợp lệ.' : (e as Error).message); }
+      const rows = await api<Connection[]>('/ai-sessions/check', 'POST', {});
+      setConnections(supported(rows));
+      window.dispatchEvent(new Event('ai-status-change'));
+    } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  async function disconnect(provider: string) {
-    setBusy(true); setError("");
-    try { await api("/ai-sessions/remove", "POST", { provider }); setRevision(n => n + 1); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
-  }
-  async function cancel() {
-    if (!attempt) return;
-    try { await api("/provider-logins/" + attempt.id, "DELETE"); setAttempt(null); }
-    catch (e) { setError((e as Error).message); }
-  }
+
   return <section className="settings-card settings-card-wide">
-    <h2>Liên kết AI</h2>
-    {error && <div className="error-box" role="alert">{error}</div>}
-    {message && <div className="settings-alert success" role="status">{message}</div>}
-    <div className="provider-list">{connections.map(connection =>
-      <div className={"provider-card " + (connection.connected ? "is-connected" : "")} key={connection.provider}>
-        <div className="provider-main">
-          {connection.connected ? <Wifi size={17}/> : <WifiOff size={17}/>}
-          <div>
-            <strong>{connection.label}</strong>
-            {connection.description && <span style={{ display: "block", fontSize: "0.8rem", color: "#94a3b8", marginTop: 2 }}>{connection.description}</span>}
-            <span style={{ fontSize: "0.78rem", color: connection.connected ? "#4ade80" : "#f87171" }}>{connection.connected ? "● Đã kết nối" : "○ Chưa kết nối"}</span>
-          </div>
+    <div className="settings-card-title">
+      <h2>Tài khoản AI trên trình duyệt</h2>
+      <button className="button compact" disabled={busy || loginBusy} onClick={() => void check()}>
+        <RefreshCw size={16} />{busy ? 'Đang kiểm tra' : 'Kiểm tra lại'}
+      </button>
+    </div>
+    {(error || loginError) && <div className="error-box" role="alert">{error || loginError}</div>}
+    <div className="provider-list">{groups.map(group => {
+      const services = connections.filter(row => group.services.includes(row.provider));
+      if (!services.length) return null;
+      const connected = services.some(row => row.connected);
+      return <div className={'provider-card ai-account-group ' + (connected ? 'is-connected' : '')} key={group.id} data-account-group={group.id}>
+        <div className="ai-account-heading">
+          <strong>{group.label}</strong>
+          {!connected && <button className="button compact" disabled={busy || loginBusy} onClick={() => { setError(''); void login(group.loginProvider); }}>
+            <LogIn size={16} />Đăng nhập
+          </button>}
         </div>
-        <div className="provider-actions">
-          <button className="button compact" disabled={busy || !!attempt} onClick={() => void login(connection.provider)}>{connection.connected ? "Đăng nhập lại" : "Đăng nhập"}</button>
-          {connection.connected && <button className="button compact" disabled={busy || !!attempt} onClick={() => void disconnect(connection.provider)}>Ngắt</button>}
-        </div>
-      </div>)}</div>
-    <details className="provider-login-fallback">
-      <summary>Trình duyệt chặn đăng nhập?</summary>
-      <p>Đăng nhập bằng Chrome/Edge thường, xuất cookie JSON bằng J2TEAM rồi nhập để xác minh.</p>
-      {connections.map(connection => <div className="provider-card" key={connection.provider}>
-        <strong>{connection.label}</strong>
-        <div className="provider-actions">
-          <button className="button compact" disabled={busy || !!attempt} onClick={() => void openBrowser(connection.provider)}>Mở trình duyệt</button>
-          <label className="button compact">Nhập cookie JSON
-            <input type="file" accept=".json,application/json" hidden disabled={busy || !!attempt} onChange={event => { const file=event.target.files?.[0]; event.target.value=''; void importSession(connection.provider,file); }}/>
-          </label>
-        </div>
-      </div>)}
-      {busy && <p role="status">Đang xác minh…</p>}
-    </details>
+        {services.map(connection => <div className="ai-account-service" key={connection.provider}>
+          {services.length > 1 && <span>{connection.label.replace(' (Google)', '')}</span>}
+          <AccountStatus connection={connection} />
+        </div>)}
+      </div>;
+    })}</div>
     {attempt && <div role="status" className="provider-login-status">
-      Hoàn tất đăng nhập trong cửa sổ trình duyệt.
-      <button className="button compact" onClick={() => void cancel()}>Hủy</button>
+      {attempt.message || 'Đang chờ đăng nhập trên trình duyệt.'}
+      <button className="button compact" onClick={() => void cancel()}>Hủy kiểm tra</button>
     </div>}
   </section>;
 }
-

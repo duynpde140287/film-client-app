@@ -29,14 +29,12 @@ if (buildOnStart) {
   try {
     await buildBundle(false);
     if (dev) {
+      watcher = await buildBundle(true);
       console.log('Đã cập nhật bundle. Nhấn Ctrl+R trong app để tải lại.');
     }
   } catch (e) {
-    if (!(await exists(entry))) {
-      console.error('Build frontend thất bại và chưa có bundle: ' + e.message);
-      process.exit(1);
-    }
-    console.warn('Vite build gặp lỗi, dùng bundle sẵn trong desktop/app: ' + e.message);
+    console.error('Build frontend thất bại: ' + e.message);
+    process.exit(1);
   }
 } else if (!(await exists(entry))) {
   console.log('Chưa có bundle desktop/app, đang build lần đầu...');

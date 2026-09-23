@@ -13,7 +13,7 @@ export async function ensureSdk(){
  try{await access(sdkExecutable);return;}catch{}
  await mkdir(cacheDir,{recursive:true});
  console.log("Preparing official NW.js SDK for desktop tests...");
- try { await get({version,flavor:"sdk",platform,arch:process.arch,cacheDir,cache:true,downloadUrl:"https://dl.nwjs.io",ffmpeg:false,nativeAddon:false}); }
+ try { await get({version,flavor:"sdk",platform,arch:process.arch,cacheDir,cache:false,downloadUrl:"https://dl.nwjs.io",ffmpeg:false,nativeAddon:false}); }
  catch(error) {
   // Installer verifies the archive before creating this optional convenience symlink.
   if(error.code !== "EPERM" || error.syscall !== "symlink") throw error;

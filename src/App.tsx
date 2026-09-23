@@ -19,7 +19,6 @@ import {
   Film,
   Settings,
   HelpCircle,
-  Users,
   Menu,
   LogOut,
   ArrowRight,
@@ -47,7 +46,6 @@ import { Overview, Projects } from "./Overview";
 import { Templates } from "./Templates";
 import { Workspace } from "./Workspace";
 import { ExternalSessionPage } from "./ExternalSession";
-import { useRemote } from "./hooks";
 
 /** ============================================================
  *  LOGIN PAGE
@@ -91,13 +89,12 @@ function Login() {
         <div className="login-copy">
           <span className="eyebrow">CONTENT AUTOMATION</span>
           <h1>
-            Ý tưởng của bạn.
+            Chạm vào ý tưởng
             <br />
-            AI lo phần còn lại.
+            Khởi động tương lai 💎💎💎
           </h1>
           <p>
-            Tạo nội dung, hình ảnh, giọng đọc và video tự động.
-            Bạn chỉ cần nhập ý tưởng.
+            Tự động hóa sáng tạo nội dung bằng AI.
           </p>
           <div className="creative-orbit">
             <div className="orbit-card orbit-a">
@@ -145,7 +142,9 @@ function Login() {
             <ErrorBox message={error} />
             <button className="button primary login-submit" disabled={busy}>
               {busy ? (
-                <Spinner />
+                <>
+                  <Spinner /> Đang kiểm tra AI...
+                </>
               ) : (
                 <>
                   Vào Studio <ArrowRight size={18} />
@@ -153,9 +152,9 @@ function Login() {
               )}
             </button>
           </form>
-          <p className="login-note">
-            <Bot size={16} /> Kết nối ChatGPT/Veo 3 khi tạo ảnh và video.
-          </p>
+          {/* <p className="login-note">
+            <Bot size={16} />
+          </p> */}
         </div>
       </section>
     </div>
@@ -266,26 +265,8 @@ function CapCutExportPage() {
   return <ExternalSessionPage provider="capcut" />;
 }
 
-type VoiceAllocation = {
-  available: boolean;
-  status: string;
-  requiresUserLogin: boolean;
-};
-
-type AiConnection = {
-  provider: "chatgpt" | "veo3" | string;
-  label: string;
-  loginUrl: string;
-  connected: boolean;
-  adapterAvailable?: boolean;
-  status: string;
-  description: string;
-  savedAt?: string | null;
-};
-
 function SettingsPage() {
   const session = getSession();
-  const [revision, setRevision] = useState(0);
   const [name, setName] = useState(session?.user.name || "");
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -295,11 +276,6 @@ function SettingsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const { data: gemini, error: geminiError } = useRemote<VoiceAllocation>('/provider-sessions/gemini', revision);
-  const { data: voice, error: voiceError } = useRemote<VoiceAllocation>(
-    "/provider-sessions/onimivoice",
-    revision,
-  );
 
   useEffect(() => {
     setName(getSession()?.user.name || "");
@@ -308,8 +284,8 @@ function SettingsPage() {
   const user = session?.user;
   const expiryLabel =
     user?.expiresAt
-        ? new Date(user.expiresAt).toLocaleDateString("vi-VN")
-        : "Chưa có hạn";
+      ? new Date(user.expiresAt).toLocaleDateString("vi-VN")
+      : "Chưa có hạn";
   const statusLabel =
     user?.licenseStatus === "ACTIVE"
       ? "Đang dùng"
@@ -363,7 +339,7 @@ function SettingsPage() {
           <h1>Cài đặt</h1>
         </div>
       </div>
-      <ErrorBox message={error || voiceError || geminiError} />
+      <ErrorBox message={error} />
       {notice && (
         <div className="settings-alert success" role="status">
           <Check size={16} /> {notice}
@@ -449,28 +425,6 @@ function SettingsPage() {
           </div>
         </section>
 
-        <section className="settings-card">
-          <div className="settings-card-title">
-            <Mic size={18} />
-            <div>
-              <h2>Omni Voice</h2>
-            </div>
-          </div>
-          <div className="quota-stack">
-            <span className="quota-pill">{voice?.available ? "Có session" : voice?.status === "EXPIRED" ? "Cần cập nhật session" : "Chưa có session"}</span>
-            <strong>{voice?.available ? "Sẵn sàng sử dụng" : "Chờ cấu hình"}</strong>
-            <small>Không cần đăng nhập riêng.</small>
-          </div>
-        </section>
-
-        <section className="settings-card">
-          <div className="settings-card-title"><Bot size={18} /><h2>Gemini</h2></div>
-          <div className="quota-stack">
-            <span className="quota-pill">{gemini?.available ? "Có session" : gemini?.status === "EXPIRED" ? "Cần cập nhật session" : "Chưa có session"}</span>
-            <strong>Template và script</strong>
-            <small>Dùng session hệ thống.</small>
-          </div>
-        </section>
         <AiConnections />
       </div>
     </>
@@ -507,7 +461,14 @@ export function App() {
   const [platform, setPlatform] = useState<Platform>("YouTube");
   const [platformOpen, setPlatformOpen] = useState(false);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [pageLoading, setPageLoading] = useState(false);
   const route = useLocation();
+
+  useEffect(() => {
+    setPageLoading(true);
+    const timer = setTimeout(() => setPageLoading(false), 250);
+    return () => clearTimeout(timer);
+  }, [route.pathname, route.search]);
 
   useEffect(() => {
     const change = () => setSession(getSession());
@@ -523,15 +484,22 @@ export function App() {
     return () => clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    if (session)
+    if (session?.token)
       void api<User>("/auth/me")
-        .then((user) => setSession((s) => (s ? { ...s, user } : null)))
-        .catch(() => {});
+        .then((user) => setSession((s) => (s && user ? { ...s, user } : s)))
+        .catch(() => { });
   }, [session?.token]);
 
-  useEffect(() => { setActiveProject(null); }, [session?.user.id]);
+  useEffect(() => { setActiveProject(null); }, [session?.user?.id]);
 
-  if (!session) return <Login />;
+  if (!session?.token) return <Login />;
+  if (!session.user) {
+    return (
+      <div style={{ display: "grid", placeItems: "center", minHeight: "100vh", background: "#0b1120" }}>
+        <Spinner />
+      </div>
+    );
+  }
 
   const licenseLabel =
     session.user.licenseStatus === "ACTIVE"
@@ -545,7 +513,7 @@ export function App() {
   async function logout() {
     try {
       await api("/auth/logout", "POST", {});
-    } catch {}
+    } catch { }
     saveSession(null);
   }
 
@@ -571,36 +539,20 @@ export function App() {
         />
       )}
       <aside className={`sidebar ${mobile ? "is-open" : ""}`}>
-        {/* ── PLATFORM SWITCHER ── */}
-        <div className="platform-switcher">
-          <button
-            className="platform-btn"
-            onClick={() => setPlatformOpen((o) => !o)}
-          >
-            <Youtube size={18} />
-            <span>{platform}</span>
-            <ChevronDown size={14} className={platformOpen ? "rotated" : ""} />
-          </button>
-          {platformOpen && (
-            <div className="platform-dropdown">
-              {PLATFORMS.map((p) => (
-                <button
-                  key={p}
-                  className={p === platform ? "selected" : ""}
-                  onClick={() => {
-                    setPlatform(p);
-                    setPlatformOpen(false);
-                  }}
-                >
-                  {p === platform && <Check size={13} />} {p}
-                </button>
-              ))}
-            </div>
-          )}
+        {/* ── APP BRAND ── */}
+        <div className="sidebar-header">
+          <Link to="/" className="sidebar-brand-title">
+            <span className="brand-mark">
+              <Clapperboard size={18} />
+            </span>
+            <span>
+              ProjectX<span className="brand-dot">.</span>film
+            </span>
+          </Link>
         </div>
 
         <nav className="sidebar-templates-nav">
-          <NavLink to="/templates" className={({isActive}) => "nav-link " + (isActive ? "active" : "")}>
+          <NavLink to="/templates" className={({ isActive }) => "nav-link " + (isActive ? "active" : "")}>
             <FolderKanban size={18} /> Template
           </NavLink>
           <div className="sidebar-project-tree">
@@ -675,6 +627,7 @@ export function App() {
 
       <div className="main-shell">
         <header className="topbar">
+          {pageLoading && <div className="route-loading-bar" />}
           <div className="breadcrumb">
             <button
               className="icon-button mobile-only"

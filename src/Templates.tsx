@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   Plus,
@@ -18,8 +18,9 @@ import {
   Lightbulb,
   Sparkles,
 } from "lucide-react";
-import { api, upload } from "./api";
+import { api, upload, getSession } from "./api";
 import { useRemote } from "./hooks";
+import { useAiLogin } from './hooks/useAiLogin';
 import {
   Badge,
   Empty,
@@ -42,14 +43,113 @@ function downloadText(name: string, text: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-const DOMAIN_OPTIONS = [
-  "Giáo dục & khoa học",
-  "Sản phẩm & thương hiệu",
-  "Thiên nhiên & khám phá",
-  "Phim & kể chuyện",
-  "Lịch sử & văn hóa",
-  "Sức khỏe & lối sống",
-];
+
+function normalizeDisplayedText(value: string): string {
+  return value
+    .replace(/\\r\\n/g, "\r\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r");
+}
+
+function formulaDisplayText(formula: string | Record<string, any>): string {
+  const raw = typeof formula === "string" ? formula : JSON.stringify(formula, null, 2);
+  return normalizeDisplayedText(raw);
+}
+
+function ResultRow({ icon, label, value }: { icon: ReactNode; label: string; value: ReactNode }) {
+  return <div className="build-result-row"><span className="build-result-row-icon">{icon}</span><span className="build-result-row-label">{label}</span><strong>{value}</strong></div>;
+}
+
+function ResultStatus({ ready, busy, readyLabel = "Hoàn tất" }: { ready: boolean; busy: boolean; readyLabel?: string }) {
+  return <span className={"build-result-status " + (ready ? "is-ready" : busy ? "is-busy" : "")}>{ready ? <Check size={12} strokeWidth={3} /> : null}{busy ? "Đang xử lý…" : ready ? readyLabel : "Chưa có kết quả"}</span>;
+}
+
+type PreparedTemplate = {
+  payload: string;
+  signature: string;
+  children: { step: number; name: string; content: string }[];
+};
+type TemplateJob = { id: string; stage: 1 | 2 | 3; createdAt: number; status: string; result?: any; error?: { message: string } };
+type TemplateDraft = {
+  name?: string;
+  sourceVideoUrl?: string;
+  customerIdea?: string;
+  country?: string;
+  durationSeconds?: string;
+  build?: { content?: Record<string, any>; formula?: string | Record<string, any> } | null;
+  prepared?: PreparedTemplate | null;
+  pending?: TemplateJob | null;
+  styleImages?: { name: string; type: string; dataUrl: string }[];
+};
+
+function templateDraftKey() { return 'template_build_draft:' + (getSession()?.user?.id || 'anonymous'); }
+function readTemplateDraft(): TemplateDraft {
+  try { return JSON.parse(localStorage.getItem(templateDraftKey()) || "{}") || {}; }
+  catch { return {}; }
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error("Không đọc được file ảnh."));
+    reader.readAsDataURL(file);
+  });
+}
+
+
+const BuildStep = ({
+  stepNo,
+  title,
+  provider,
+  providerLabel,
+  isConnected,
+  onLogin,
+  busy,
+  children
+}: {
+  stepNo: number;
+  title: string;
+  provider?: string;
+  providerLabel?: string;
+  isConnected?: boolean;
+  onLogin: (provider: string) => void;
+  busy: boolean | string;
+  children: React.ReactNode;
+}) => (
+  <section className="template-build-step">
+    <div className="build-step-top" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <span className="build-step-no">{stepNo}</span>
+        <h3 className="build-step-title" style={{ margin: 0 }}>{title}</h3>
+      </div>
+      {provider && !isConnected && (
+        <button
+          type="button"
+          onClick={() => onLogin(provider)}
+          disabled={Boolean(busy)}
+          style={{
+            padding: "0.25rem 0.6rem",
+            borderRadius: "6px",
+            background: "#ef4444",
+            color: "#fff",
+            textDecoration: "none",
+            fontSize: "0.78rem",
+            fontWeight: 600,
+            whiteSpace: "normal",
+            border: "none",
+            cursor: Boolean(busy) ? "not-allowed" : "pointer",
+          }}
+        >
+          {`Liên kết ${providerLabel}`}
+        </button>
+      )}
+    </div>
+    <div className="build-step-controls">
+      {children}
+    </div>
+  </section>
+);
 
 function TemplateForm({
   open,
@@ -64,40 +164,134 @@ function TemplateForm({
 }) {
   const [busy, setBusy] = useState(false),
     [submitting, setSubmitting] = useState(false),
-    [error, setError] = useState(""),
-    [domainOpen, setDomainOpen] = useState(false);
+    [error, setError] = useState("");
   const value = initial?.input;
-  const [name, setName] = useState(value?.name || "");
-  const [domain, setDomain] = useState(value?.domain || "");
-  const [hasStyleFiles, setHasStyleFiles] = useState(false);
-  const domainRef = useRef<HTMLDivElement>(null);
+  const aiLogin = useAiLogin();
+  const savedDraft = readTemplateDraft();
+  const [name, setName] = useState(value?.name || savedDraft.name || "");
+  const [styleImages, setStyleImages] = useState<NonNullable<TemplateDraft['styleImages']>>(savedDraft.styleImages || []);
+  const hasStyleFiles = styleImages.length > 0;
+
   const formRef = useRef<HTMLFormElement>(null);
-  const [build, setBuild] = useState<{ id: string; content?: { title: string; durationSeconds: number }; formula?: { name: string; coreTheme: string } } | null>(null);
-  const [runningStage, setRunningStage] = useState<0 | 1 | 2>(0);
+  const [prepared, setPrepared] = useState<PreparedTemplate | null>(initial ? null : savedDraft.prepared || null);
+  const [pending, setPending] = useState<TemplateJob | null>(initial ? null : savedDraft.pending || null);
+  const [build, setBuild] = useState<TemplateDraft["build"]>(() => {
+    if (initial) return null; // Không dùng nháp cho mode update
+    try {
+      const saved = localStorage.getItem(templateDraftKey());
+      if (saved) return JSON.parse(saved).build || null;
+    } catch { }
+    return null;
+  });
 
-  const { data: aiSessions } = useRemote<Array<{ provider: string; connected: boolean }>>("/ai-sessions");
-  const isGeminiConnected = Boolean(aiSessions?.find(s => s.provider === "gemini")?.connected);
+  useEffect(() => {
+    if (!initial && open) {
+      const current = readTemplateDraft();
+      try {
+        localStorage.setItem(templateDraftKey(), JSON.stringify({ ...current, name, build, prepared, pending }));
+      } catch { setError("Không đủ dung lượng lưu bản nháp. Hãy chọn ảnh nhỏ hơn."); }
+    }
+  }, [build, name, initial, prepared, pending, open]);
+  useEffect(() => {
+    if (initial) return;
+    const clearDraftOnExit = () => localStorage.removeItem(templateDraftKey());
+    window.addEventListener('beforeunload', clearDraftOnExit);
+    return () => window.removeEventListener('beforeunload', clearDraftOnExit);
+  }, [initial]);
+  const [runningStage, setRunningStage] = useState<0 | 1 | 2 | 3>(0);
+  const [aiRevision, setAiRevision] = useState(0);
+  useEffect(() => {
+    if (!pending) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setBusy(true);
+    setRunningStage(pending.stage);
+    const finish = () => { setPending(null); setBusy(false); setRunningStage(0); };
+    const unwrapJobResult = (result: any) => result?.data ?? result?.result ?? result;
+    const poll = async () => {
+      try {
+        const job = await api<TemplateJob>('/template-builds/jobs/' + pending.id);
+        if (!active) return;
+        if (job.status === 'DONE') {
+          const result = unwrapJobResult(job.result);
+          if (pending.stage === 1) {
+            if (!result?.content) {
+              setError('Step 1 hoàn tất nhưng không nhận được dữ liệu nội dung. Hãy thử lại.');
+            } else setBuild(result);
+          } else if (pending.stage === 2) {
+            if (!result?.formula) {
+              setError('Step 2 hoàn tất nhưng không nhận được công thức. Hãy thử lại.');
+            } else setBuild(previous => ({ ...previous, formula: result.formula }));
+          } else if (result?.children?.length) setPrepared(result);
+          else setError('Step 3 hoàn tất nhưng không nhận đủ 5 file con. Hãy thử lại.');
+          finish();
+          return;
+        }
+        if (job.status === 'ERROR') { setError(job.error?.message || 'Không hoàn tất được bước template.'); finish(); setAiRevision(value => value + 1); return; }
+        if (Date.now() - pending.createdAt > 480000) { setError('Tác vụ quá thời gian chờ. Dữ liệu nháp đã có vẫn được giữ nguyên.'); finish(); return; }
+      } catch (e) {
+        if (!active) return;
+        const err = e as import('./services/api.service').ApiError;
+        if (err.code !== 'NETWORK_ERROR' || Date.now() - pending.createdAt > 480000) { setError(err.message); finish(); return; }
+      }
+      timer = setTimeout(poll, 1500);
+    };
+    void poll();
+    return () => { active = false; clearTimeout(timer); };
+  }, [pending?.id]);
+  useEffect(() => {
+    const refresh = () => setAiRevision(value => value + 1);
+    window.addEventListener('ai-status-change', refresh);
+    window.addEventListener('focus', refresh);
+    return () => { window.removeEventListener('ai-status-change', refresh); window.removeEventListener('focus', refresh); };
+  }, []);
 
-  const canStep1 = isGeminiConnected && name.trim().length >= 2 && domain.trim().length >= 2;
-  const canStep2 = canStep1 && Boolean(build?.content);
+  const { data: aiSessions } = useRemote<Array<{ provider: string; connected: boolean; browser?: 'Chrome' | 'Edge' | null }>>("/ai-sessions", aiRevision);
+  // Step 1 uses NotebookLM under the shared Google session; Gemini chat is not called here.
+  const isGoogleConnected = Boolean(aiSessions?.find(s => s.provider === "gemini" || s.provider === "notebooklm")?.connected);
+  const isGptConnected = Boolean(aiSessions?.find(s => s.provider === "chatgpt")?.connected);
+
+  const canStep1 = isGoogleConnected && name.trim().length >= 2;
+  const canStep2 = isGptConnected && name.trim().length >= 2 && Boolean(build?.content);
   const canStep3 = canStep2 && Boolean(build?.formula);
 
-  const { data: policy } = useRemote<{accept:string; textAccept?: string; imageAccept?: string; hint:string; maxImageBytes?: number; maxStyleImages?: number}>("/template-import-policy");
+  const { data: policy } = useRemote<{ accept: string; textAccept?: string; imageAccept?: string; hint: string; maxImageBytes?: number; maxStyleImages?: number }>("/template-import-policy");
   const maxImageMb = Math.floor((policy?.maxImageBytes || 10 * 1024 * 1024) / 1024 / 1024);
   const maxStyleImages = policy?.maxStyleImages || 6;
   const keepStyleImages = false;
 
-  const canSubmit = isGeminiConnected && canStep3 && (hasStyleFiles || keepStyleImages) && !busy && !submitting && runningStage === 0;
+  function saveFormDraft(form: HTMLFormElement | null, patch: Partial<TemplateDraft> = {}) {
+    setPrepared(null);
+    if (initial || !form) return;
+    const current = readTemplateDraft();
+    const formData = new FormData(form);
+    try {
+      localStorage.setItem(templateDraftKey(), JSON.stringify({
+        ...current,
+        name,
+        sourceVideoUrl: String(formData.get("sourceVideoUrl") || ""),
+        customerIdea: String(formData.get("customerIdea") || ""),
+        country: String(formData.get("country") || ""),
+        durationSeconds: String(formData.get("durationSeconds") || "300"),
+        prepared: null,
+        ...patch,
+      }));
+    } catch { setError('Không đủ dung lượng lưu bản nháp. Hãy chọn ảnh nhỏ hơn.'); }
+  }
+
+  const canSubmit = Boolean(prepared) && !busy && !submitting;
 
   async function generateStage(stage: 1 | 2) {
     const form = formRef.current;
     if (!form || busy || submitting || runningStage > 0) return;
-    if (!isGeminiConnected) {
-      setError("Vui lòng vào Cài đặt → Liên kết AI để đăng nhập Gemini trước khi dựng.");
+    const requiredAiConnected = stage === 1 ? isGoogleConnected : isGptConnected;
+    const requiredAi = stage === 1 ? "Google / NotebookLM" : "ChatGPT";
+    if (!requiredAiConnected) {
+      setError(`Vui lòng vào Cài đặt → Tài khoản AI để đăng nhập ${requiredAi} trước khi dựng.`);
       return;
     }
     if (stage === 1 && !canStep1) {
-      setError("Vui lòng nhập Tên template và Lĩnh vực trước.");
+      setError("Vui lòng nhập Tên template trước.");
       return;
     }
     const field = form.elements.namedItem(stage === 1 ? "sourceVideoUrl" : "customerIdea") as HTMLInputElement;
@@ -108,356 +302,339 @@ function TemplateForm({
     }
     setBusy(true);
     setRunningStage(stage);
+    setPrepared(null);
     setError("");
     try {
       if (stage === 1) {
-        setBuild(await api("/template-builds/content", "POST", { sourceVideoUrl: field.value }));
+        setBuild(null);
+        setPending(await api<TemplateJob>("/template-builds/jobs/content", "POST", { sourceVideoUrl: field.value }));
       } else {
-        const result = await api<{ formula: { name: string; coreTheme: string } }>(
-          "/template-builds/" + build!.id + "/formula",
+        const countryField = form.elements.namedItem("country") as HTMLSelectElement | null;
+        const job = await api<TemplateJob>(
+          "/template-builds/jobs/formula",
           "POST",
-          { customerIdea: field.value },
+          { customerIdea: field.value, country: countryField?.value, step1Text: JSON.stringify(build!.content) },
         );
-        setBuild(previous => (previous ? { ...previous, formula: result.formula } : previous));
+        setBuild(previous => previous ? { ...previous, formula: undefined } : previous);
+        setPending(job);
       }
     } catch (e) {
-      setError((e as Error).message);
-    } finally {
+      const err = e as import("./services/api.service").ApiError;
+      setError(err.message || String(e));
+      if (err.code === "PROVIDER_LOGIN_REQUIRED") {
+        setAiRevision(r => r + 1); // Cập nhật lại giao diện để hiển thị nút Đăng nhập
+      }
       setBusy(false);
       setRunningStage(0);
     }
   }
 
-  useEffect(() => {
-    function close(e: MouseEvent) {
-      if (domainRef.current && !domainRef.current.contains(e.target as Node)) setDomainOpen(false);
+
+
+  async function generateChildren() {
+    const form = formRef.current;
+    if (!form || !canStep3 || busy || !form.reportValidity()) return;
+    setBusy(true);
+    setRunningStage(3);
+    setError("");
+    try {
+      const uploadData = new FormData(form);
+      uploadData.delete("durationMinutes");
+      const detectedLanguage = String(build?.content?.sourceLanguage || "").trim();
+      const countryLanguage = String(uploadData.get("country") || "Việt Nam").trim();
+      uploadData.set("language", detectedLanguage && detectedLanguage.toLowerCase() !== "undetected"
+        ? detectedLanguage : countryLanguage);
+      uploadData.set("sourceContent", JSON.stringify(build!.content));
+      uploadData.set("formulaOutputJson", JSON.stringify(build!.formula));
+      const images = uploadData.getAll("styleImages").filter(file => file instanceof File && file.name && file.size);
+      if (!images.length) {
+        uploadData.delete("styleImages");
+        for (const image of readTemplateDraft().styleImages || []) {
+          const blob = await (await fetch(image.dataUrl)).blob();
+          uploadData.append("styleImages", new File([blob], image.name, { type: image.type || blob.type }));
+        }
+      }
+      setPrepared(null);
+      setPending(await upload<TemplateJob>("/template-builds/jobs/children", "POST", uploadData));
+    } catch (e) {
+      setError((e as Error).message);
+      setAiRevision(value => value + 1);
+      setBusy(false); setRunningStage(0);
     }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
+  }
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!e.currentTarget.reportValidity()) return;
-    if (!build?.formula) {
-      setError("Hoàn tất bước 1 và 2 trước.");
-      return;
-    }
-    if (!hasStyleFiles && !keepStyleImages) {
-      setError("Vui lòng chọn ít nhất 1 ảnh phong cách ở bước 3.");
-      return;
-    }
-    const form = new FormData(e.currentTarget);
-    form.set("buildId", build.id);
-    setBusy(true);
+    if (!prepared || busy || submitting) return;
     setSubmitting(true);
     setError("");
-    if (initial) form.set("expectedVersion", String(initial.currentVersion));
-    for (const key of ["contentFile", "styleFile", "styleImages"]) {
-      const files = form.getAll(key);
-      if (files.length && files.every((file) => file instanceof File && !file.name)) form.delete(key);
-    }
     try {
-      onDone(
-        await upload<Template>(
-          initial ? "/templates/" + initial.id + "/import" : "/templates/import",
-          initial ? "PATCH" : "POST",
-          form,
-        ),
-      );
+      const template = await api<Template>("/template-builds/commit", "POST", {
+        payload: prepared.payload, signature: prepared.signature,
+        ...(initial ? { templateId: initial.id, expectedVersion: initial.currentVersion } : {}),
+      });
+      if (!initial) localStorage.removeItem(templateDraftKey());
+      onDone(template);
       onClose();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-      setSubmitting(false);
-    }
+    } catch (e) { setError((e as Error).message); }
+    finally { setSubmitting(false); }
   }
+
+  const handleClose = () => {
+    if (!initial) {
+      localStorage.removeItem(templateDraftKey());
+      setName("");
+      setStyleImages([]);
+      setBuild(null);
+      setPrepared(null);
+      setPending(null);
+      setBusy(false);
+      setRunningStage(0);
+      setError("");
+    }
+    onClose();
+  };
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       title={initial ? "Cập nhật template" : "Thêm template"}
       wide
     >
       <form ref={formRef} className="form-stack template-build-form" onSubmit={submit}>
-        <div className="form-grid">
-          <Field label="Tên template">
-            <input
-              name="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ví dụ: Wildlife World"
-              disabled={busy || submitting || runningStage > 0}
-              required
-              minLength={2}
-            />
-          </Field>
-          <Field label="Chủ đề / lĩnh vực">
-            <div className="combo-field" ref={domainRef}>
-              <input
-                name="domain"
-                value={domain}
-                onChange={(e) => {
-                  setDomain(e.target.value);
-                  setDomainOpen(true);
-                }}
-                onFocus={() => setDomainOpen(true)}
-                placeholder="Nhập hoặc chọn chủ đề"
-                disabled={busy || submitting || runningStage > 0}
-                required
-                minLength={2}
-                maxLength={120}
-                autoComplete="off"
-              />
-              <button
-                type="button"
-                className="combo-toggle"
-                aria-label="Mở danh sách chủ đề"
-                disabled={busy || submitting || runningStage > 0}
-                onClick={() => setDomainOpen((v) => !v)}
-              >
-                <ChevronDown size={16} />
-              </button>
-              {domainOpen && (
-                <div className="combo-menu" role="listbox">
-                  {DOMAIN_OPTIONS.filter((item) =>
-                    item.toLowerCase().includes(domain.trim().toLowerCase()),
-                  ).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      role="option"
-                      className="combo-option"
-                      onClick={() => {
-                        setDomain(item);
-                        setDomainOpen(false);
-                      }}
-                    >
-                      {item}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Field>
-        </div>
-
-        {aiSessions && !isGeminiConnected && (
-          <div style={{ margin: "0 0 1.25rem 0", padding: "0.85rem 1.15rem", borderRadius: "8px", background: "rgba(239, 68, 68, 0.12)", border: "1px solid rgba(239, 68, 68, 0.35)", color: "#fca5a5", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
-            <div>
-              <strong style={{ color: "#f87171" }}>Chưa kết nối Gemini:</strong> Để dựng template (lấy nội dung video & công thức), bạn cần đăng nhập tài khoản Gemini.
-            </div>
-            <Link to="/settings" style={{ padding: "0.35rem 0.75rem", borderRadius: "6px", background: "#ef4444", color: "#fff", textDecoration: "none", fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap" }}>
-              Liên kết AI ngay
-            </Link>
-          </div>
-        )}
+        <Field label="Tên template">
+          <input
+            name="name"
+            disabled={busy || submitting}
+            value={name}
+            onChange={(e) => {
+              const nextName = e.target.value;
+              setName(nextName);
+              saveFormDraft(formRef.current, { name: nextName });
+            }}
+            placeholder="Ví dụ: Wildlife World"
+            required
+            minLength={2}
+          />
+        </Field>
+        <input type="hidden" name="domain" value="General" />
 
         <div className="template-builder-flow">
           {/* BƯỚC 1: Video nguồn */}
-          <section className={"template-build-step " + (!canStep1 ? "is-step-disabled" : "")}>
-            <div className="build-step-top">
-              <span className="build-step-no">1</span>
-              <h3 className="build-step-title">
-                Video nguồn {!isGeminiConnected ? <small className="muted font-normal text-danger" style={{ color: "#f87171" }}>(Cần đăng nhập Gemini)</small> : !canStep1 && <small className="muted font-normal">(Cần nhập Tên & Lĩnh vực)</small>}
-              </h3>
-            </div>
-            <div className="build-step-controls">
-              <div className="build-step-input-col">
-                <label className="link-input-shell">
-                  <LinkIcon size={17} />
-                  <input
-                    name="sourceVideoUrl"
-                    onChange={() => setBuild(null)}
-                    disabled={!canStep1 || busy || submitting || runningStage > 0}
-                    type="url"
-                    defaultValue={value?.sourceVideoUrl}
-                    placeholder={canStep1 ? "https://www.youtube.com/watch?v=..." : "Nhập Tên template và Lĩnh vực trước để mở..."}
-                    required
-                    maxLength={2048}
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                </label>
-              </div>
-              <button
-                className="button gradient-action build-step-btn"
-                type="button"
-                disabled={!canStep1 || busy || submitting || runningStage > 0}
-                onClick={() => void generateStage(1)}
-              >
-                {runningStage === 1 ? <Spinner /> : <Sparkles size={16} />}
-                {runningStage === 1 ? "Đang lấy nội dung…" : "Lấy nội dung"}
-              </button>
-              <aside className={"build-step-result " + (build?.content ? "is-ready" : "")}>
-                <strong>{build?.content?.title || "Nội dung nguồn"}</strong>
-                <span>
-                  {runningStage === 1
-                    ? "Đang xử lý…"
-                    : build?.content
-                      ? "Hoàn tất"
-                      : canStep1
-                        ? "Chờ chạy"
-                        : "Chưa mở"}
-                </span>
-                <small>{build?.content ? "Đã trích xuất" : canStep1 ? "Chưa có kết quả" : "Cần Tên & Lĩnh vực"}</small>
-              </aside>
-            </div>
-          </section>
-
-          {/* BƯỚC 2: Ý tưởng */}
-          <section className={"template-build-step " + (!canStep2 ? "is-step-disabled" : "")}>
-            <div className="build-step-top">
-              <span className="build-step-no">2</span>
-              <h3 className="build-step-title">
-                Ý tưởng {!canStep2 && <small className="muted font-normal">(Cần hoàn thành Bước 1)</small>}
-              </h3>
-            </div>
-            <div className="build-step-controls">
-              <div className="build-step-input-col">
-                <textarea
-                  name="customerIdea"
-                  onChange={() => setBuild(previous => (previous ? { ...previous, formula: undefined } : null))}
-                  disabled={!canStep2 || busy || submitting || runningStage > 0}
-                  rows={3}
-                  defaultValue={value?.customerIdea}
-                  placeholder={canStep2 ? "Nhập idea, góc kể, đối tượng xem..." : "Hoàn thành bước 1 (Lấy nội dung) để mở..."}
+          <BuildStep stepNo={1} title="Video nguồn" provider="gemini" providerLabel="Google / NotebookLM" isConnected={isGoogleConnected} busy={busy || aiLogin.busy} onLogin={aiLogin.login}>
+            <div className="build-step-input-col">
+              <div className="link-input-shell">
+                <LinkIcon size={20} strokeWidth={2} />
+                <input
+                  name="sourceVideoUrl"
+                  onChange={() => { setBuild(null); saveFormDraft(formRef.current); }}
+                  disabled={submitting || busy}
+                  type="url"
+                  defaultValue={value?.sourceVideoUrl || savedDraft.sourceVideoUrl}
+                  placeholder="https://www.youtube.com/watch?v=..."
                   required
-                  minLength={10}
-                  maxLength={4000}
+                  maxLength={2048}
+                  autoComplete="off"
+                  spellCheck={false}
                 />
               </div>
-              <button
-                className="button gradient-action build-step-btn"
-                type="button"
-                disabled={!canStep2 || busy || submitting || runningStage > 0}
-                onClick={() => void generateStage(2)}
-              >
-                {runningStage === 2 ? <Spinner /> : <Sparkles size={16} />}
-                {runningStage === 2 ? "Đang tạo công thức…" : "Tạo công thức"}
-              </button>
-              <aside className={"build-step-result " + (build?.formula ? "is-ready" : "")}>
-                <strong>{build?.formula?.name || "Công thức"}</strong>
-                <span>
-                  {runningStage === 2
-                    ? "Đang xử lý…"
-                    : build?.formula
-                      ? "Hoàn tất"
-                      : canStep2
-                        ? "Chờ chạy"
-                        : "Chưa mở"}
-                </span>
-                <small>{build?.formula ? "Đã tạo công thức" : canStep2 ? "Content + idea tạo công thức" : "Cần bước 1"}</small>
-              </aside>
             </div>
-          </section>
+            <button
+              className="button gradient-action build-step-btn"
+              type="button"
+              disabled={!canStep1 || busy || submitting || runningStage > 0}
+              onClick={() => void generateStage(1)}
+            >
+              {runningStage === 1 ? <Spinner /> : <Sparkles size={16} />}
+              {runningStage === 1 ? "Đang lấy nội dung…" : "Lấy nội dung"}
+            </button>
+            <aside className={"build-step-result " + (build?.content ? "is-ready has-preview" : "")}>
+              <div className="build-result-heading"><div><strong><Check size={15} /> Nội dung</strong><small>{build?.content ? "Đã trích xuất từ video" : "Kết quả Step 1"}</small></div><ResultStatus ready={Boolean(build?.content)} busy={runningStage === 1} /></div>
+              {build?.content && <div className="build-result-details">
+                <ResultRow icon={<FileText size={13} />} label="Nguồn" value="NotebookLM" />
+                <ResultRow icon={<Layers3 size={13} />} label="Nội dung" value={`${String(build.content.content || "").length.toLocaleString()} ký tự`} />
+                <ResultRow icon={<Lightbulb size={13} />} label="Ngôn ngữ" value={build.content.sourceLanguage || "Tự nhận diện"} />
+              </div>}
+              {build?.content && (
+                <div className="build-step-result-tooltip">
+                  <pre>{JSON.stringify(build.content, null, 2)}</pre>
+                </div>
+              )}
+            </aside>
+          </BuildStep>
+
+          {/* BƯỚC 2: Ý tưởng */}
+          <BuildStep stepNo={2} title="Ý tưởng" provider="chatgpt" providerLabel="ChatGPT" isConnected={isGptConnected} busy={busy || aiLogin.busy} onLogin={aiLogin.login}>
+            <div className="build-step-input-col">
+              <textarea
+                name="customerIdea"
+                onChange={() => { setBuild(previous => (previous ? { ...previous, formula: undefined } : null)); saveFormDraft(formRef.current); }}
+                disabled={submitting || busy}
+                rows={3}
+                defaultValue={value?.customerIdea || savedDraft.customerIdea}
+                placeholder="Nhập ý tưởng video..."
+                required
+                minLength={10}
+                maxLength={4000}
+              />
+              <div style={{ marginTop: "0.5rem" }}>
+                <select name="country" className="styled-select" defaultValue={savedDraft.country || "Việt Nam"} onChange={() => { setBuild(previous => previous ? { ...previous, formula: undefined } : previous); saveFormDraft(formRef.current); }} disabled={submitting || busy}>
+                  <option value="Mỹ (United States)">🇺🇸 Mỹ (United States)</option>
+                  <option value="Việt Nam">🇻🇳 Việt Nam</option>
+                  <option value="Nhật Bản (Japan)">🇯🇵 Nhật Bản (Japan)</option>
+                  <option value="Hàn Quốc (South Korea)">🇰🇷 Hàn Quốc (South Korea)</option>
+                  <option value="Trung Quốc (China)">🇨🇳 Trung Quốc (China)</option>
+                  <option value="Anh (United Kingdom)">🇬🇧 Anh (United Kingdom)</option>
+                  <option value="Pháp (France)">🇫🇷 Pháp (France)</option>
+                  <option value="Đức (Germany)">🇩🇪 Đức (Germany)</option>
+                </select>
+              </div>
+            </div>
+            <button
+              className="button gradient-action build-step-btn"
+              type="button"
+              disabled={!canStep2 || busy || submitting || runningStage > 0}
+              onClick={() => void generateStage(2)}
+            >
+              {runningStage === 2 ? <Spinner /> : <Sparkles size={16} />}
+              {runningStage === 2 ? "Đang tạo công thức…" : "Tạo công thức"}
+            </button>
+            <aside className={"build-step-result " + (build?.formula ? "is-ready has-preview" : "")}>
+              <div className="build-result-heading"><div><strong><Check size={15} /> Công thức chủ đề</strong><small>{build?.formula ? "Công thức Markdown đã sẵn sàng" : "Kết quả Step 2"}</small></div><ResultStatus ready={Boolean(build?.formula)} busy={runningStage === 2} /></div>
+              {build?.formula && <div className="build-result-details">
+                <ResultRow icon={<FileText size={13} />} label="Tên công thức" value={typeof build.formula === "object" && build.formula !== null ? (build.formula as any).name || "Công thức chủ đề" : "Công thức Markdown"} />
+                {typeof build.formula === "object" && build.formula !== null && <>
+                  <ResultRow icon={<Lightbulb size={13} />} label="Chủ đề chính" value={(build.formula as any).coreTheme || "Đã phân tích"} />
+                  <ResultRow icon={<Layers3 size={13} />} label="Module bắt buộc" value={`${Array.isArray((build.formula as any).mandatoryModules) ? (build.formula as any).mandatoryModules.length : 0} module`} />
+                </>}
+                <ResultRow icon={<FileText size={13} />} label="Định dạng" value="Structured Markdown" />
+              </div>}
+              {build?.formula && <div className="build-step-result-tooltip"><pre>{formulaDisplayText(build.formula).slice(0, 4000)}</pre></div>}
+            </aside>
+            {build?.formula && (
+              <div className="formula-result-container" style={{ marginTop: "1rem", background: "var(--color-bg)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--color-border)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                  <strong style={{ color: "var(--color-accent)" }}>Dữ liệu Công thức (Markdown)</strong>
+                  <button
+                    type="button"
+                    className="button outline"
+                    style={{ padding: "4px 12px", fontSize: "0.85rem" }}
+                    onClick={() => {
+                      const text = formulaDisplayText(build.formula);
+                      const blob = new Blob([text], { type: "text/markdown" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "formula_result.md";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Tải xuống Markdown
+                  </button>
+                </div>
+                <pre style={{ maxHeight: "300px", overflow: "auto", fontSize: "0.85rem", whiteSpace: "pre-wrap", margin: 0 }}>
+                  {formulaDisplayText(build.formula)}
+                </pre>
+              </div>
+            )}
+          </BuildStep>
 
           {/* BƯỚC 3: Ảnh phong cách */}
-          <section className={"template-build-step " + (!canStep3 ? "is-step-disabled" : "")}>
-            <div className="build-step-top">
-              <span className="build-step-no">3</span>
-              <h3 className="build-step-title">
-                Ảnh phong cách {!canStep3 && <small className="muted font-normal">(Cần hoàn thành Bước 2)</small>}
-              </h3>
-            </div>
-            <div className="build-step-controls">
-              <div className="build-step-input-col">
-                <label className={"style-dropzone " + (!canStep3 ? "opacity-50 pointer-events-none" : "")}>
-                  <ImageIcon size={24} />
-                  <span>Kéo thả hoặc chọn ảnh</span>
-                  <small>JPG, PNG, WEBP · {maxImageMb}MB/ảnh · tối đa {maxStyleImages}</small>
-                  <input
-                    type="file"
-                    name="styleImages"
-                    accept={policy?.imageAccept || ".jpg,.jpeg,.png,.webp"}
-                    multiple
-                    disabled={!canStep3 || busy || submitting || runningStage > 0}
-                    required={!keepStyleImages}
-                    onChange={(e) => setHasStyleFiles(Boolean(e.target.files && e.target.files.length > 0))}
-                  />
+          <BuildStep stepNo={3} title="Ảnh phong cách" provider="chatgpt" providerLabel="ChatGPT" isConnected={isGptConnected} busy={busy || aiLogin.busy} onLogin={aiLogin.login}>
+            <div className="build-step-input-col">
+              <label className="style-dropzone">
+                <ImageIcon size={24} />
+                <span>Kéo thả hoặc chọn ảnh</span>
+                <small>JPG, PNG, WEBP · {maxImageMb}MB/ảnh · tối đa {maxStyleImages}</small>
+                <input
+                  type="file"
+                  name="styleImages"
+                  accept={policy?.imageAccept || ".jpg,.jpeg,.png,.webp"}
+                  multiple
+                  required={!hasStyleFiles && !keepStyleImages}
+                  disabled={busy || submitting}
+                  onChange={async (event) => {
+                    const files = [...(event.currentTarget.files || [])];
+                    if (!files.length) return;
+                    try {
+                      const styleImages = await Promise.all(files.map(async (file) => ({
+                        name: file.name,
+                        type: file.type || "image/jpeg",
+                        dataUrl: await fileToDataUrl(file),
+                      })));
+                      setStyleImages(styleImages);
+                      saveFormDraft(formRef.current, { styleImages });
+                    } catch (e) { setError((e as Error).message); }
+                  }}
+                />
+              </label>
+              {styleImages.length > 0 && <div className="style-image-preview">{styleImages.map(image =>
+                <img key={image.name} src={image.dataUrl} alt={image.name} title={image.name} />
+              )}</div>}
+              {keepStyleImages && <small className="muted">Đang giữ {value?.sourceFiles?.styleImages?.length} ảnh style.</small>}
+              <div style={{ marginTop: "0.5rem" }}>
+                <label style={{ fontSize: "0.8rem", color: "var(--color-muted)", display: "block", marginBottom: "0.2rem" }}>
+                  Thời lượng video (5 - 25 phút):
                 </label>
-                {keepStyleImages && <small className="muted">Đang giữ {value?.sourceFiles?.styleImages?.length} ảnh style.</small>}
+                <select
+                  name="durationMinutes"
+                  className="styled-select"
+                  defaultValue={String(Number(savedDraft.durationSeconds || 300) / 60)}
+                  disabled={busy || submitting}
+                  onChange={(e) => {
+                    const mins = parseInt(e.target.value) || 5;
+                    const secsInput = formRef.current?.elements.namedItem("durationSeconds") as HTMLInputElement | null;
+                    if (secsInput) secsInput.value = String(mins * 60);
+                    saveFormDraft(formRef.current);
+                  }}
+                >
+                  <option value="5">⏱️ 5 phút (300s)</option>
+                  <option value="10">⏱️ 10 phút (600s)</option>
+                  <option value="15">⏱️ 15 phút (900s)</option>
+                  <option value="20">⏱️ 20 phút (1200s)</option>
+                  <option value="25">⏱️ 25 phút (1500s)</option>
+                </select>
               </div>
-              <button
-                className="button gradient-action build-step-btn"
-                type="submit"
-                disabled={!canStep3 || (!hasStyleFiles && !keepStyleImages) || busy || submitting || runningStage > 0}
-              >
-                {submitting ? <Spinner /> : <Sparkles size={16} />}
-                {submitting ? "Đang tạo 5 file…" : "Tạo 5 file"}
-              </button>
-              <aside className={"build-step-result " + (hasStyleFiles ? "is-ready" : "")}>
-                <strong>5 file con</strong>
-                <span>
-                  {submitting
-                    ? "Đang tạo…"
-                    : hasStyleFiles
-                      ? "Sẵn sàng"
-                      : canStep3
-                        ? "Chờ chọn ảnh"
-                        : "Chưa mở"}
-                </span>
-                <small>Story · Character · Outline · Voice · Image</small>
-              </aside>
             </div>
-          </section>
-        </div>
-
-        <div className="form-grid">
-          <Field label="Ngôn ngữ">
-            <select
-              name="language"
-              className="styled-select"
-              defaultValue={value?.language || "Vietnamese"}
-              disabled={!canStep1 || busy || submitting || runningStage > 0}
-              required
+            <button
+              className="button gradient-action build-step-btn"
+              type="button"
+              onClick={() => void generateChildren()}
+              disabled={!canStep3 || (!hasStyleFiles && !keepStyleImages) || busy || submitting || runningStage > 0}
             >
-              <option value="Vietnamese">🇻🇳 Tiếng Việt (Vietnamese)</option>
-              <option value="English">🇺🇸 Tiếng Anh (English)</option>
-              <option value="Japanese">🇯🇵 Tiếng Nhật (Japanese)</option>
-              <option value="Korean">🇰🇷 Tiếng Hàn (Korean)</option>
-              <option value="Chinese">🇨🇳 Tiếng Trung (Chinese)</option>
-              <option value="French">🇫🇷 Tiếng Pháp (French)</option>
-              <option value="German">🇩🇪 Tiếng Đức (German)</option>
-              <option value="Spanish">🇪🇸 Tiếng Tây Ban Nha (Spanish)</option>
-            </select>
-          </Field>
-          <Field label="Tổng thời lượng (giây)">
-            <div className="duration-input-wrapper">
-              <input
-                name="durationSeconds"
-                type="number"
-                min={2}
-                max={7200}
-                defaultValue={value?.durationSeconds || 30}
-                disabled={!canStep1 || busy || submitting || runningStage > 0}
-                required
-              />
-              <span className="duration-unit-badge">giây</span>
-            </div>
-          </Field>
+              {runningStage === 3 ? <Spinner /> : <Sparkles size={16} />}
+              {runningStage === 3 ? "Đang tạo 5 file…" : "Tạo 5 file"}
+            </button>
+            <aside className={"build-step-result " + (prepared ? "is-ready has-preview" : "")}>
+              <div className="build-result-heading"><div><strong><Check size={15} /> Output</strong><small>{prepared ? "Đã tạo đủ tài nguyên theo chủ đề" : "Kết quả Step 3"}</small></div><ResultStatus ready={Boolean(prepared)} busy={runningStage === 3} readyLabel={`${prepared?.children?.length || 5} file`} /></div>
+              {prepared && <div className="build-result-details build-result-chips">
+                <ResultRow icon={<Layers3 size={13} />} label="Tài nguyên đầu ra" value={`${prepared.children.length} file con`} />
+                <div className="build-result-chip-list">{prepared.children.map(child => <span key={child.name} className="build-result-chip"><Check size={11} />{child.name.replace(/\.md$/i, "")}</span>)}</div>
+              </div>}
+              {prepared && <div className="build-step-result-tooltip"><pre>{JSON.stringify(prepared.children, null, 2)}</pre></div>}
+            </aside>
+          </BuildStep>
         </div>
 
-        <details className="template-options">
-          <summary>Ghi chú thêm</summary>
-          <Field label="Tham khảo">
-            <textarea
-              name="reference"
-              rows={2}
-              defaultValue={value?.reference}
-              disabled={!canStep1 || busy || submitting || runningStage > 0}
-              placeholder="Những đặc điểm về cấu trúc hoặc phong cách bạn muốn tham khảo…"
-            />
-          </Field>
-        </details>
+        <input
+          type="hidden"
+          name="language"
+          value={String(build?.content?.sourceLanguage || savedDraft.country || "Việt Nam").trim() || "Việt Nam"}
+          readOnly
+        />
+        <input type="hidden" name="durationSeconds" defaultValue={value?.durationSeconds || savedDraft.durationSeconds || 300} />
 
-        <ErrorBox message={error} />
+        <ErrorBox message={error || aiLogin.error} />
+        {aiLogin.attempt && <div role="status" className="provider-login-status">
+          {aiLogin.attempt.message || 'Đang chờ đăng nhập trên Chrome.'}
+          <button type="button" className="button compact" onClick={() => void aiLogin.cancel()}>Hủy kiểm tra</button>
+        </div>}
 
         <div className="form-footer">
           <span className="muted small-text">
-            Gemini xử lý bằng tài khoản hệ thống.
+            Step 1 dùng NotebookLM + Gemini · Step 2 & 3 dùng ChatGPT.
           </span>
           <button
             className="button primary"
@@ -721,7 +898,7 @@ export function Templates({
                       const input = version.input || selected.input;
                       const file = input.sourceFiles?.[kind];
                       return file && <div key={kind} className="row">
-                        <FileText size={16}/><span>{file.filename} · {file.characters.toLocaleString("vi-VN")} ký tự</span>
+                        <FileText size={16} /><span>{file.filename} · {file.characters.toLocaleString("vi-VN")} ký tự</span>
                         <button className="button compact" onClick={() => downloadText(file.filename, kind === "content" ? input.requirements : input.style)}>Tải nội dung đã đọc</button>
                       </div>;
                     })}
